@@ -20,6 +20,7 @@ import os
 import re
 import sys
 from pathlib import Path
+import preflight
 
 # ─── Cross-platform UTF-8 output ──────────────────────────────────────────────
 if hasattr(sys.stdout, "reconfigure"):
@@ -35,8 +36,6 @@ def clean_name(name):
     """
     Strip junk from a folder or file name, preserving the year in parentheses.
     """
-    original = name
-
     # Separate the file extension if present
     stem, ext = os.path.splitext(name)
     has_ext = ext.lower() in RENAME_EXTENSIONS
@@ -77,9 +76,7 @@ def clean_name(name):
     working = re.sub(r'\s{2,}', ' ', working).strip()
 
     # Rebuild with extension if needed
-    result = working + ext if has_ext else working
-
-    return result
+    return working + ext if has_ext else working
 
 
 def is_multipart(name):
@@ -104,33 +101,47 @@ def is_multipart(name):
 
 
 def should_rename(original, cleaned):
-    """Return True if the name actually changed."""
     return original != cleaned
 
 
-def rename_item(old_path, new_path, dry_run=True):
-    """Rename a file or folder."""
+def rename_item(old_path, new_path, dry_run=True, log_fn=None):
+    def _out(msg):
+        if log_fn:
+            log_fn(msg)
+        else:
+            print(msg, flush=True)
+
     if dry_run:
-        print(f"  WOULD RENAME: {os.path.basename(old_path)}")
-        print(f"             → {os.path.basename(new_path)}")
+        _out(f"  WOULD RENAME: {os.path.basename(old_path)}")
+        _out(f"             → {os.path.basename(new_path)}")
     else:
         try:
             # os.replace is atomic and works on all platforms including Windows,
             # where os.rename raises FileExistsError if the destination exists.
             os.replace(old_path, new_path)
-            print(f"  RENAMED: {os.path.basename(old_path)}")
-            print(f"       → {os.path.basename(new_path)}")
+            _out(f"  RENAMED: {os.path.basename(old_path)}")
+            _out(f"       → {os.path.basename(new_path)}")
         except Exception as e:
-            print(f"  ERROR renaming {old_path}: {e}")
+            _out(f"  ERROR renaming {old_path}: {e}")
 
 
-def process_movies(movies_dir, dry_run=True):
-    """Process all movie folders and their contents."""
+def process_movies(movies_dir, dry_run=True,
+                   progress_cb=None, log_cb=None, cancel=None):
     movies_dir = Path(movies_dir)
-    
+
     if not movies_dir.exists():
-        print(f"Error: Directory not found: {movies_dir}")
+        msg = f"Error: Directory not found: {movies_dir}"
+        if log_cb:
+            log_cb(msg, "error")
+        else:
+            print(msg)
         sys.exit(1)
+
+    def _log(msg, level="info"):
+        if log_cb:
+            log_cb(msg, level)
+        else:
+            print(msg, flush=True)
 
     folders = sorted([
         f for f in movies_dir.iterdir()
@@ -142,25 +153,28 @@ def process_movies(movies_dir, dry_run=True):
     renamed_files = 0
     unchanged = 0
 
-    print(f"\n{'DRY RUN — No changes will be made' if dry_run else 'RENAMING FILES'}")
-    print(f"{'=' * 60}")
-    print(f"Found {total} movie folders in {movies_dir}\n")
+    _log(f"\n{'DRY RUN — No changes will be made' if dry_run else 'RENAMING FILES'}")
+    _log("=" * 60)
+    _log(f"Found {total} movie folders in {movies_dir}\n")
 
-    for folder in folders:
+    for idx, folder in enumerate(folders, 1):
+        if cancel and cancel():
+            _log("Cancelled by user.", "warning")
+            break
+
         folder_name = folder.name
 
         if is_multipart(folder_name):
             unchanged += 1
+            if progress_cb:
+                progress_cb(idx, total, folder_name, "skipped",
+                            renamed_folders, 0, unchanged)
             continue
 
         clean_folder_name = clean_name(folder_name)
-
         folder_changed = should_rename(folder_name, clean_folder_name)
-
-        # Determine new folder path
         new_folder_path = folder.parent / clean_folder_name
 
-        # Process files inside folder first (before renaming folder)
         files_in_folder = sorted([
             f for f in folder.iterdir()
             if f.is_file() and not f.name.startswith('.')
@@ -173,39 +187,43 @@ def process_movies(movies_dir, dry_run=True):
             if should_rename(file_name, clean_file_name):
                 file_changes.append((file, folder / clean_file_name))
 
-        # Print header for this folder if anything changes
         if folder_changed or file_changes:
-            print(f"[FOLDER] {folder_name}")
+            _log(f"[FOLDER] {folder_name}")
 
-            # Rename files first (while folder name is still original)
             for old_file, new_file in file_changes:
-                rename_item(old_file, new_file, dry_run=dry_run)
+                rename_item(old_file, new_file, dry_run=dry_run, log_fn=lambda m: _log(m))
                 renamed_files += 1
 
-            # Then rename the folder itself
             if folder_changed:
-                rename_item(folder, new_folder_path, dry_run=dry_run)
+                rename_item(folder, new_folder_path, dry_run=dry_run, log_fn=lambda m: _log(m))
                 renamed_folders += 1
 
-            print()
+            _log("")
         else:
             unchanged += 1
 
-    print(f"{'=' * 60}")
+        if progress_cb:
+            progress_cb(idx, total, folder_name,
+                        "done" if (folder_changed or file_changes) else "skipped",
+                        renamed_folders, 0, unchanged)
+
+    _log("=" * 60)
     if dry_run:
-        print(f"DRY RUN COMPLETE — Nothing was changed")
-        print(f"  Folders that WOULD be renamed: {renamed_folders}")
-        print(f"  Files that WOULD be renamed:   {renamed_files}")
-        print(f"  Already clean (unchanged):     {unchanged}")
-        print(f"\nTo apply these changes, run with --rename flag:")
-        print(f"  python3 rename_movies.py \"{movies_dir}\" --rename")
+        _log("DRY RUN COMPLETE — Nothing was changed")
+        _log(f"  Folders that WOULD be renamed: {renamed_folders}")
+        _log(f"  Files that WOULD be renamed:   {renamed_files}")
+        _log(f"  Already clean (unchanged):     {unchanged}")
+        _log(f"\nTo apply these changes, run with --rename flag:")
+        _log(f'  python3 rename_movies.py "{movies_dir}" --rename')
     else:
-        print(f"RENAME COMPLETE")
-        print(f"  Folders renamed: {renamed_folders}")
-        print(f"  Files renamed:   {renamed_files}")
-        print(f"  Unchanged:       {unchanged}")
-        print(f"\nNext step: Re-run the scraper to generate .nfo files for renamed folders:")
-        print(f'  python3 scraper.py movies "/path/to/Movies"')
+        _log("RENAME COMPLETE")
+        _log(f"  Folders renamed: {renamed_folders}")
+        _log(f"  Files renamed:   {renamed_files}")
+        _log(f"  Unchanged:       {unchanged}")
+        _log(f"\nNext step: Re-run the scraper to generate .nfo files for renamed folders:")
+        _log(f'  python3 scraper.py movies "{movies_dir}"')
+
+    return renamed_folders, 0, unchanged
 
 
 if __name__ == '__main__':
@@ -220,4 +238,37 @@ if __name__ == '__main__':
     movies_dir = args[0]
     dry_run = '--rename' not in args
 
-    process_movies(movies_dir, dry_run=dry_run)
+    logger, log_file = preflight.setup_logging("rename_movies")
+    logger.info(f"Path: {movies_dir}  DryRun: {dry_run}")
+
+    if not preflight.check_python_version(logger=logger):
+        sys.exit(1)
+    if not dry_run and not preflight.check_write_permission(movies_dir, logger=logger):
+        sys.exit(1)
+
+    total = sum(
+        1 for e in os.listdir(movies_dir)
+        if os.path.isdir(os.path.join(movies_dir, e)) and not e.startswith('.')
+    ) if os.path.isdir(movies_dir) else 0
+
+    label = "Rename Movies" if not dry_run else "Rename Movies (Dry Run)"
+    win = preflight.ProgressWindow(
+        title=f"Plex Movie Renamer — {label}",
+        total=total,
+        log_file=log_file,
+    )
+
+    def work(progress_cb, log_cb, cancel):
+        done, errors, skipped = process_movies(
+            movies_dir, dry_run,
+            progress_cb=progress_cb, log_cb=log_cb, cancel=cancel,
+        )
+        logger.info(f"Finished — renamed={done} skipped={skipped}")
+        action = "Would rename" if dry_run else "Renamed"
+        preflight.notify(
+            "Plex Movie Renamer — Complete",
+            f"{action} {done} folders, {skipped} unchanged.",
+        )
+        return done, errors, skipped
+
+    win.run(work)

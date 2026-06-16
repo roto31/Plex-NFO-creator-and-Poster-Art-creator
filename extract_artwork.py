@@ -22,7 +22,8 @@ import sys
 import os
 import re
 import subprocess
-import platform
+import json
+import preflight
 
 # ─── Cross-platform UTF-8 output ──────────────────────────────────────────────
 if hasattr(sys.stdout, "reconfigure"):
@@ -34,34 +35,7 @@ if hasattr(sys.stdout, "reconfigure"):
 VIDEO_EXTS = {'.mkv', '.mp4', '.mov', '.avi', '.m4v'}
 
 
-# ─── ffmpeg check ─────────────────────────────────────────────────────────────
-
-def _ffmpeg_install_hint():
-    """Return platform-appropriate ffmpeg install instructions."""
-    system = platform.system()
-    if system == "Darwin":
-        return "  Install with: brew install ffmpeg"
-    elif system == "Windows":
-        return (
-            "  Install from: https://ffmpeg.org/download.html#build-windows\n"
-            "  Or via winget:      winget install ffmpeg\n"
-            "  Or via Chocolatey:  choco install ffmpeg\n"
-            "  After installing, ensure ffmpeg.exe is on your PATH."
-        )
-    else:  # Linux
-        return (
-            "  Debian / Ubuntu:  sudo apt install ffmpeg\n"
-            "  Fedora / RHEL:    sudo dnf install ffmpeg\n"
-            "  Arch:             sudo pacman -S ffmpeg"
-        )
-
-
-def check_ffmpeg():
-    try:
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5)
-        return result.returncode == 0
-    except Exception:
-        return False
+# ─── ffmpeg checks and install are handled by preflight.check_ffmpeg() ────────
 
 
 # ─── Multi-part detection ─────────────────────────────────────────────────────
@@ -148,50 +122,62 @@ def find_first_episode(season_path):
 
 # ─── Movies ───────────────────────────────────────────────────────────────────
 
-def process_movies(root_dir, extract, force):
+def process_movies(root_dir, extract, force,
+                   progress_cb=None, log_cb=None, cancel=None):
     folders = sorted([
         e for e in os.listdir(root_dir)
         if os.path.isdir(os.path.join(root_dir, e)) and not e.startswith('.')
     ])
     total = len(folders)
 
+    def _log(msg, level="info"):
+        if log_cb:
+            log_cb(msg, level)
+        else:
+            print(msg, flush=True)
+
     mode_label = "EXTRACTING ARTWORK" if extract else "DRY RUN — No files will be written"
-    print(f"\n{mode_label}")
-    print("=" * 60)
-    print(f"Found {total} movie folders\n")
+    _log(f"\n{mode_label}")
+    _log("=" * 60)
+    _log(f"Found {total} movie folders\n")
 
     n_extracted = n_exists = n_multipart = n_no_art = n_no_video = 0
 
     for idx, folder_name in enumerate(folders, 1):
+        if cancel and cancel():
+            _log("Cancelled by user.", "warning")
+            break
+
         folder_path = os.path.join(root_dir, folder_name)
         prefix = f"[{idx}/{total}] {folder_name}"
 
         if is_multipart(folder_name):
-            if not extract:
-                print(f"{prefix}\n  ⏭ Skipping — multi-part file\n")
-            else:
-                print(f"{prefix} ⏭ multi-part")
+            _log(f"{prefix} ⏭ multi-part — skipped", "info")
             n_multipart += 1
+            if progress_cb:
+                progress_cb(idx, total, folder_name, "skipped",
+                            n_extracted, n_no_art, n_multipart + n_no_video)
             continue
 
         poster_path = os.path.join(folder_path, "poster.jpg")
         if os.path.exists(poster_path) and not force:
-            if not extract:
-                print(f"{prefix}\n  ⏭ poster.jpg already exists\n")
-            else:
-                print(f"{prefix} ⏭ already exists")
+            _log(f"{prefix} ⏭ poster.jpg already exists", "info")
             n_exists += 1
+            if progress_cb:
+                progress_cb(idx, total, folder_name, "skipped",
+                            n_extracted, n_no_art, n_exists + n_multipart + n_no_video)
             continue
 
         video_path = find_video(folder_path)
         if not video_path:
+            _log(f"{prefix} ⚠ no video file found", "warning")
             n_no_video += 1
+            if progress_cb:
+                progress_cb(idx, total, folder_name, "skipped",
+                            n_extracted, n_no_art, n_exists + n_multipart + n_no_video)
             continue
 
-        video_name = os.path.basename(video_path)
-
         if not extract:
-            # Dry run: probe whether artwork exists without writing anything
             probe = subprocess.run(
                 ['ffprobe', '-v', 'error', '-show_streams',
                  '-select_streams', 'v', '-of', 'json', video_path],
@@ -199,81 +185,98 @@ def process_movies(root_dir, extract, force):
             )
             has_art = False
             if probe.returncode == 0:
-                import json
                 try:
                     streams = json.loads(probe.stdout).get('streams', [])
-                    # artwork is a secondary video stream or one with attached_pic=1
                     has_art = len(streams) > 1 or any(
                         s.get('disposition', {}).get('attached_pic') == 1 for s in streams
                     )
                 except Exception:
                     pass
-            print(f"{prefix}")
-            print(f"  Video: {video_name}")
             if has_art:
-                print(f"  WOULD EXTRACT → poster.jpg\n")
+                _log(f"{prefix}  WOULD EXTRACT → poster.jpg")
                 n_extracted += 1
             else:
-                print(f"  WOULD EXTRACT → poster.jpg (no embedded artwork — would skip)\n")
+                _log(f"{prefix}  no embedded artwork — would skip", "warning")
                 n_no_art += 1
         else:
             success = extract_embedded_artwork(video_path, poster_path)
             if success:
-                print(f"{prefix} ✓ → poster.jpg")
+                _log(f"{prefix} ✓ → poster.jpg")
                 n_extracted += 1
+                if progress_cb:
+                    progress_cb(idx, total, folder_name, "done",
+                                n_extracted, n_no_art, n_exists + n_multipart + n_no_video)
             else:
-                print(f"{prefix} ❌ no embedded artwork")
+                _log(f"{prefix} ❌ no embedded artwork", "error")
                 n_no_art += 1
+                if progress_cb:
+                    progress_cb(idx, total, folder_name, "error",
+                                n_extracted, n_no_art, n_exists + n_multipart + n_no_video)
+            continue
 
-    print("\n" + "=" * 60)
+        if progress_cb:
+            progress_cb(idx, total, folder_name, "done",
+                        n_extracted, n_no_art, n_exists + n_multipart + n_no_video)
+
+    _log("\n" + "=" * 60)
     if not extract:
-        print("DRY RUN COMPLETE")
-        print(f"  Would extract:  {n_extracted} posters")
-        print(f"  Already exist:  {n_exists} posters")
-        print(f"  Multi-part:     {n_multipart} skipped")
-        print(f"  No artwork:     {n_no_art} skipped")
-        print(f"  No video file:  {n_no_video} skipped")
-        print(f"  Total folders:  {total}")
-        print(f'\nTo apply: python3 extract_artwork.py movies "{root_dir}" --extract')
+        _log("DRY RUN COMPLETE")
+        _log(f"  Would extract:  {n_extracted} posters")
+        _log(f"  Already exist:  {n_exists} posters")
+        _log(f"  Multi-part:     {n_multipart} skipped")
+        _log(f"  No artwork:     {n_no_art} skipped")
+        _log(f"  No video file:  {n_no_video} skipped")
+        _log(f"  Total folders:  {total}")
+        _log(f'\nTo apply: python3 extract_artwork.py movies "{root_dir}" --extract')
     else:
-        print("COMPLETE")
-        print(f"  Extracted:    {n_extracted} poster.jpg files")
-        print(f"  Already had:  {n_exists}")
-        print(f"  Multi-part:   {n_multipart} skipped")
-        print(f"  No artwork:   {n_no_art} skipped")
-        print(f"  No video:     {n_no_video} skipped")
+        _log("COMPLETE")
+        _log(f"  Extracted:    {n_extracted} poster.jpg files")
+        _log(f"  Already had:  {n_exists}")
+        _log(f"  Multi-part:   {n_multipart} skipped")
+        _log(f"  No artwork:   {n_no_art} skipped")
+        _log(f"  No video:     {n_no_video} skipped")
+
+    return n_extracted, n_no_art, n_exists + n_multipart + n_no_video
 
 
 # ─── TV Shows ─────────────────────────────────────────────────────────────────
 
-def process_tvshows(root_dir, extract, force):
+def process_tvshows(root_dir, extract, force,
+                    progress_cb=None, log_cb=None, cancel=None):
     shows = sorted([
         e for e in os.listdir(root_dir)
         if os.path.isdir(os.path.join(root_dir, e)) and not e.startswith('.')
     ])
     total = len(shows)
 
+    def _log(msg, level="info"):
+        if log_cb:
+            log_cb(msg, level)
+        else:
+            print(msg, flush=True)
+
     mode_label = "EXTRACTING ARTWORK" if extract else "DRY RUN — No files will be written"
-    print(f"\n{mode_label}")
-    print("=" * 60)
-    print(f"Found {total} TV show folders\n")
+    _log(f"\n{mode_label}")
+    _log("=" * 60)
+    _log(f"Found {total} TV show folders\n")
 
     n_show_posters = n_season_posters = n_ep_thumbs = 0
     n_exists = n_no_art = 0
 
     for idx, show_name in enumerate(shows, 1):
-        show_path = os.path.join(root_dir, show_name)
-        prefix = f"[{idx}/{total}] {show_name}"
-        print(prefix)
+        if cancel and cancel():
+            _log("Cancelled by user.", "warning")
+            break
 
-        # Find season dirs
+        show_path = os.path.join(root_dir, show_name)
+        _log(f"[{idx}/{total}] {show_name}")
+
         season_dirs = sorted([
             d for d in os.listdir(show_path)
             if os.path.isdir(os.path.join(show_path, d)) and not d.startswith('.')
             and re.match(r'[Ss]eason\s*\d+|[Ss]pecials?', d)
         ])
 
-        # Show-level poster: from first episode of Season 1
         show_poster = os.path.join(show_path, "poster.jpg")
         if not os.path.exists(show_poster) or force:
             source = None
@@ -284,22 +287,21 @@ def process_tvshows(root_dir, extract, force):
                     break
             if source:
                 if not extract:
-                    print(f"  WOULD EXTRACT → poster.jpg (from {os.path.basename(source)})")
+                    _log(f"  WOULD EXTRACT → poster.jpg (from {os.path.basename(source)})")
                     n_show_posters += 1
                 else:
                     if extract_embedded_artwork(source, show_poster):
-                        print(f"  ✓ poster.jpg")
+                        _log(f"  ✓ poster.jpg")
                         n_show_posters += 1
                     else:
-                        print(f"  ❌ poster.jpg — no embedded artwork")
+                        _log(f"  ❌ poster.jpg — no embedded artwork", "error")
                         n_no_art += 1
             else:
-                print(f"  ⏭ poster.jpg — no source episode found")
+                _log(f"  ⏭ poster.jpg — no source episode found", "warning")
         else:
-            print(f"  ⏭ poster.jpg already exists")
+            _log(f"  ⏭ poster.jpg already exists")
             n_exists += 1
 
-        # Per-season processing
         for season_dir in season_dirs:
             season_path = os.path.join(show_path, season_dir)
             videos = sorted([
@@ -309,24 +311,22 @@ def process_tvshows(root_dir, extract, force):
             if not videos:
                 continue
 
-            # Season poster from first episode
             season_poster = os.path.join(season_path, "poster.jpg")
             if not os.path.exists(season_poster) or force:
                 source = os.path.join(season_path, videos[0])
                 if not extract:
-                    print(f"    {season_dir}: WOULD EXTRACT → poster.jpg")
+                    _log(f"    {season_dir}: WOULD EXTRACT → poster.jpg")
                     n_season_posters += 1
                 else:
                     if extract_embedded_artwork(source, season_poster):
-                        print(f"    {season_dir} ✓ → poster.jpg")
+                        _log(f"    {season_dir} ✓ → poster.jpg")
                         n_season_posters += 1
                     else:
-                        print(f"    {season_dir} ❌ poster.jpg — no embedded artwork")
+                        _log(f"    {season_dir} ❌ poster.jpg — no embedded artwork", "error")
                         n_no_art += 1
             else:
                 n_exists += 1
 
-            # Episode thumbnails
             for vfile in videos:
                 stem = os.path.splitext(vfile)[0]
                 thumb_path = os.path.join(season_path, f"{stem}-thumb.jpg")
@@ -342,34 +342,36 @@ def process_tvshows(root_dir, extract, force):
                     else:
                         n_no_art += 1
 
-        print()
+        _log("")
+        n_done = n_show_posters + n_season_posters + n_ep_thumbs
+        if progress_cb:
+            progress_cb(idx, total, show_name, "done",
+                        n_done, n_no_art, n_exists)
 
-    print("=" * 60)
+    _log("=" * 60)
     if not extract:
-        print("DRY RUN COMPLETE")
-        print(f"  Show posters:    {n_show_posters}")
-        print(f"  Season posters:  {n_season_posters}")
-        print(f"  Episode thumbs:  {n_ep_thumbs}")
-        print(f"  Already exist:   {n_exists}")
-        print(f"  No artwork:      {n_no_art}")
-        print(f'\nTo apply: python3 extract_artwork.py tvshows "{root_dir}" --extract')
+        _log("DRY RUN COMPLETE")
+        _log(f"  Show posters:    {n_show_posters}")
+        _log(f"  Season posters:  {n_season_posters}")
+        _log(f"  Episode thumbs:  {n_ep_thumbs}")
+        _log(f"  Already exist:   {n_exists}")
+        _log(f"  No artwork:      {n_no_art}")
+        _log(f'\nTo apply: python3 extract_artwork.py tvshows "{root_dir}" --extract')
     else:
-        print("COMPLETE")
-        print(f"  Show posters extracted:   {n_show_posters}")
-        print(f"  Season posters extracted: {n_season_posters}")
-        print(f"  Episode thumbs extracted: {n_ep_thumbs}")
-        print(f"  Already existed:          {n_exists}")
-        print(f"  No embedded artwork:      {n_no_art}")
+        _log("COMPLETE")
+        _log(f"  Show posters extracted:   {n_show_posters}")
+        _log(f"  Season posters extracted: {n_season_posters}")
+        _log(f"  Episode thumbs extracted: {n_ep_thumbs}")
+        _log(f"  Already existed:          {n_exists}")
+        _log(f"  No embedded artwork:      {n_no_art}")
+
+    n_done = n_show_posters + n_season_posters + n_ep_thumbs
+    return n_done, n_no_art, n_exists
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 def main():
-    if not check_ffmpeg():
-        print("❌ ffmpeg not found. ffmpeg must be installed and available on your PATH.")
-        print(_ffmpeg_install_hint())
-        sys.exit(1)
-
     args = sys.argv[1:]
     extract = '--extract' in args
     force = '--force' in args
@@ -381,17 +383,56 @@ def main():
 
     mode, path = args[0], args[1]
 
+    if mode not in ('movies', 'tvshows'):
+        print(f"Unknown mode '{mode}'. Use 'movies' or 'tvshows'.")
+        sys.exit(1)
+
     if not os.path.isdir(path):
         print(f"Error: '{path}' is not a directory")
         sys.exit(1)
 
-    if mode == 'movies':
-        process_movies(path, extract, force)
-    elif mode == 'tvshows':
-        process_tvshows(path, extract, force)
-    else:
-        print(f"Unknown mode '{mode}'. Use 'movies' or 'tvshows'.")
+    label = "Movies" if mode == "movies" else "TV Shows"
+    logger, log_file = preflight.setup_logging("extract_artwork")
+    logger.info(f"Mode: {mode}  Path: {path}  Extract: {extract}  Force: {force}")
+
+    if not preflight.check_python_version(logger=logger):
         sys.exit(1)
+    if not preflight.check_ffmpeg(logger=logger):
+        sys.exit(1)
+    if extract and not preflight.check_write_permission(path, logger=logger):
+        sys.exit(1)
+
+    total = sum(
+        1 for e in os.listdir(path)
+        if os.path.isdir(os.path.join(path, e)) and not e.startswith('.')
+    )
+
+    win = preflight.ProgressWindow(
+        title=f"Plex Artwork Extractor — {label}",
+        total=total,
+        log_file=log_file,
+    )
+
+    def work(progress_cb, log_cb, cancel):
+        if mode == 'movies':
+            done, errors, skipped = process_movies(
+                path, extract, force,
+                progress_cb=progress_cb, log_cb=log_cb, cancel=cancel,
+            )
+        else:
+            done, errors, skipped = process_tvshows(
+                path, extract, force,
+                progress_cb=progress_cb, log_cb=log_cb, cancel=cancel,
+            )
+        logger.info(f"Finished — done={done} errors={errors} skipped={skipped}")
+        action = "Extracted" if extract else "Would extract"
+        preflight.notify(
+            "Plex Artwork Extractor — Complete",
+            f"{label}: {action} {done}, {errors} errors, {skipped} skipped.",
+        )
+        return done, errors, skipped
+
+    win.run(work)
 
 
 if __name__ == '__main__':

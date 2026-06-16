@@ -27,9 +27,10 @@ import unicodedata
 import urllib.request
 import urllib.parse
 import urllib.error
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from xml.etree.ElementTree import Element, SubElement, tostring, parse as parse_xml
 from xml.dom import minidom
+import preflight
 
 # ─── Cross-platform UTF-8 output ──────────────────────────────────────────────
 # Windows cmd/PowerShell defaults to cp1252 which cannot render ✓ ❌ ⏭ etc.
@@ -438,16 +439,16 @@ def build_episode_nfo(ep, series_chars=None):
 # ─── Movie processing ─────────────────────────────────────────────────────────
 
 def _process_one_movie(args):
-    idx, total, folder_name, folder_path, force = args
+    idx, total, folder_name, folder_path, force, log_fn = args
     nfo_path = os.path.join(folder_path, "Movie.nfo")
     prefix   = f"[{idx}/{total}] {folder_name}"
 
     if is_multipart(folder_name):
-        tprint(f"{prefix} ⏭ multi-part — skipped", flush=True)
+        log_fn(f"{prefix} ⏭ multi-part — skipped")
         return "skipped"
 
     if os.path.exists(nfo_path) and not force:
-        tprint(f"{prefix} ⏭ Already has NFO", flush=True)
+        log_fn(f"{prefix} ⏭ Already has NFO")
         return "skipped"
 
     if not has_video(folder_path):
@@ -459,41 +460,72 @@ def _process_one_movie(args):
     try:
         movie_id = tmdb_search(title, year)
         if not movie_id:
-            tprint(f"{prefix} ❌ Not found", flush=True)
+            log_fn(f"{prefix} ❌ Not found")
             return "error"
 
         details  = tmdb_details(movie_id)
         root_xml = build_movie_nfo(details)
         write_nfo(nfo_path, root_xml)
-        tprint(f"{prefix} ✓ → Movie.nfo", flush=True)
+        log_fn(f"{prefix} ✓ → Movie.nfo")
         return "done"
 
     except Exception as exc:
-        tprint(f"{prefix} ❌ Error: {exc}", flush=True)
+        log_fn(f"{prefix} ❌ Error: {exc}")
         return "error"
 
 
-def process_movies(root_dir, force):
+def process_movies(root_dir, force,
+                   progress_cb=None, log_cb=None, cancel=None):
+    """
+    Scan root_dir and generate Movie.nfo for every movie folder.
+
+    progress_cb(current, total, name, status, done, errors, skipped) — called per item
+    log_cb(message, level)  — called for detailed sub-item messages
+    cancel — threading.Event; processing stops if set
+
+    Returns (done, errors, skipped).
+    """
     entries = sorted([
         e for e in os.listdir(root_dir)
         if os.path.isdir(os.path.join(root_dir, e)) and not e.startswith(".")
     ])
     total = len(entries)
-    print(f"Processing {total} movies… ({MAX_WORKERS} parallel workers)\n", flush=True)
+
+    # When no GUI callback, fall back to tprint
+    def _log(msg):
+        if log_cb:
+            log_cb(msg, "info")
+        else:
+            tprint(msg, flush=True)
+
+    if not progress_cb:
+        print(f"Processing {total} movies… ({MAX_WORKERS} parallel workers)\n", flush=True)
 
     tasks = [
-        (idx, total, name, os.path.join(root_dir, name), force)
+        (idx, total, name, os.path.join(root_dir, name), force, _log)
         for idx, name in enumerate(entries, 1)
     ]
 
     done = errors = skipped = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        for status in ex.map(_process_one_movie, tasks):
+        future_to_task = {ex.submit(_process_one_movie, t): t for t in tasks}
+        for idx, future in enumerate(as_completed(future_to_task), 1):
+            if cancel and cancel.is_set():
+                break
+            task   = future_to_task[future]
+            name   = task[2]
+            status = future.result()
             if status == "done":    done    += 1
             elif status == "error": errors  += 1
             else:                   skipped += 1
 
-    print(f"\n✓ Completed: {done} movies ({errors} errors, {skipped} skipped)", flush=True)
+            if progress_cb:
+                progress_cb(idx, total, name, status, done, errors, skipped)
+
+    if not progress_cb:
+        print(f"\n✓ Completed: {done} movies ({errors} errors, {skipped} skipped)", flush=True)
+
+    return done, errors, skipped
 
 # ─── TV Show processing ───────────────────────────────────────────────────────
 
@@ -518,7 +550,7 @@ def _read_tvdb_id_from_nfo(nfo_path):
     return None
 
 
-def _process_seasons(show_path, series_id, series_chars, force):
+def _process_seasons(show_path, series_id, series_chars, force, log_fn):
     season_dirs = sorted([
         d for d in os.listdir(show_path)
         if os.path.isdir(os.path.join(show_path, d)) and not d.startswith(".")
@@ -540,15 +572,15 @@ def _process_seasons(show_path, series_id, series_chars, force):
         if not os.path.exists(season_nfo) or force:
             try:
                 write_nfo(season_nfo, build_season_nfo(season_num))
-                tprint(f"    {season_dir} ✓ → season.nfo", flush=True)
+                log_fn(f"    {season_dir} ✓ → season.nfo")
             except Exception as exc:
-                tprint(f"    {season_dir} ❌ season.nfo: {exc}", flush=True)
+                log_fn(f"    {season_dir} ❌ season.nfo: {exc}")
 
         try:
             ep_list = tvdb_episodes(series_id, season_num)
             ep_map  = {(e["seasonNumber"], e["number"]): e for e in ep_list}
         except Exception as exc:
-            tprint(f"    {season_dir} ❌ Episode fetch failed: {exc}", flush=True)
+            log_fn(f"    {season_dir} ❌ Episode fetch failed: {exc}")
             ep_map = {}
 
         video_files = sorted([
@@ -567,26 +599,26 @@ def _process_seasons(show_path, series_id, series_chars, force):
 
             ep_data = ep_map.get((s, e))
             if not ep_data:
-                tprint(f"      {vfile} ❌ S{s:02d}E{e:02d} not found in TVDB", flush=True)
+                log_fn(f"      {vfile} ❌ S{s:02d}E{e:02d} not found in TVDB")
                 continue
 
             try:
                 write_nfo(ep_nfo, build_episode_nfo(ep_data, series_chars))
-                tprint(f"      {vfile} ✓ → {os.path.basename(ep_nfo)}", flush=True)
+                log_fn(f"      {vfile} ✓ → {os.path.basename(ep_nfo)}")
             except Exception as exc:
-                tprint(f"      {vfile} ❌ Write failed: {exc}", flush=True)
+                log_fn(f"      {vfile} ❌ Write failed: {exc}")
 
 
 def _process_one_show(args):
-    idx, total, show_name, show_path, force = args
+    idx, total, show_name, show_path, force, log_fn = args
     show_nfo = os.path.join(show_path, "tvshow.nfo")
     prefix   = f"[{idx}/{total}] {show_name}"
 
     if os.path.exists(show_nfo) and not force:
-        tprint(f"{prefix} ⏭ Already has NFO", flush=True)
+        log_fn(f"{prefix} ⏭ Already has NFO")
         series_id = _read_tvdb_id_from_nfo(show_nfo)
         if series_id:
-            _process_seasons(show_path, series_id, None, force)
+            _process_seasons(show_path, series_id, None, force, log_fn)
         return "skipped"
 
     title = clean_title(show_name)
@@ -594,51 +626,79 @@ def _process_one_show(args):
     try:
         series_id = tvdb_search(title)
         if not series_id:
-            tprint(f"{prefix} ❌ Not found", flush=True)
+            log_fn(f"{prefix} ❌ Not found")
             return "error"
 
         series       = tvdb_series_extended(series_id)
         series_chars = series.get("characters", []) or []
 
         write_nfo(show_nfo, build_tvshow_nfo(series))
-        tprint(f"{prefix} ✓ → tvshow.nfo", flush=True)
+        log_fn(f"{prefix} ✓ → tvshow.nfo")
 
-        _process_seasons(show_path, series_id, series_chars, force)
+        _process_seasons(show_path, series_id, series_chars, force, log_fn)
         return "done"
 
     except Exception as exc:
-        tprint(f"{prefix} ❌ Error: {exc}", flush=True)
+        log_fn(f"{prefix} ❌ Error: {exc}")
         return "error"
 
 
-def process_tvshows(root_dir, force):
+def process_tvshows(root_dir, force,
+                    progress_cb=None, log_cb=None, cancel=None):
+    """
+    Scan root_dir and generate tvshow/season/episode NFOs.
+
+    Returns (done, errors, skipped).
+    """
     shows = sorted([
         e for e in os.listdir(root_dir)
         if os.path.isdir(os.path.join(root_dir, e)) and not e.startswith(".")
     ])
     total = len(shows)
-    print(f"Processing {total} TV shows… ({MAX_WORKERS} parallel workers)\n", flush=True)
 
-    # Authenticate once before threads start
+    def _log(msg):
+        if log_cb:
+            log_cb(msg, "info")
+        else:
+            tprint(msg, flush=True)
+
+    if not progress_cb:
+        print(f"Processing {total} TV shows… ({MAX_WORKERS} parallel workers)\n", flush=True)
+
     try:
         tvdb_login()
     except Exception as e:
-        print(f"❌ TVDB login failed: {e}")
-        sys.exit(1)
+        msg = f"❌ TVDB login failed: {e}"
+        _log(msg)
+        if not progress_cb:
+            sys.exit(1)
+        return 0, 1, 0
 
     tasks = [
-        (idx, total, name, os.path.join(root_dir, name), force)
+        (idx, total, name, os.path.join(root_dir, name), force, _log)
         for idx, name in enumerate(shows, 1)
     ]
 
     done = errors = skipped = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        for status in ex.map(_process_one_show, tasks):
+        future_to_task = {ex.submit(_process_one_show, t): t for t in tasks}
+        for idx, future in enumerate(as_completed(future_to_task), 1):
+            if cancel and cancel.is_set():
+                break
+            task   = future_to_task[future]
+            name   = task[2]
+            status = future.result()
             if status == "done":    done    += 1
             elif status == "error": errors  += 1
             else:                   skipped += 1
 
-    print(f"\n✓ Completed: {done} shows ({errors} errors, {skipped} skipped)", flush=True)
+            if progress_cb:
+                progress_cb(idx, total, name, status, done, errors, skipped)
+
+    if not progress_cb:
+        print(f"\n✓ Completed: {done} shows ({errors} errors, {skipped} skipped)", flush=True)
+
+    return done, errors, skipped
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -657,13 +717,53 @@ def main():
         print(f"Error: '{path}' is not a directory")
         sys.exit(1)
 
-    if mode == "movies":
-        process_movies(path, force)
-    elif mode == "tvshows":
-        process_tvshows(path, force)
-    else:
+    if mode not in ("movies", "tvshows"):
         print(f"Unknown mode '{mode}'. Use 'movies' or 'tvshows'.")
         sys.exit(1)
+
+    # ── Preflight ──────────────────────────────────────────────────────────────
+    logger, log_file = preflight.setup_logging("scraper")
+    logger.info(f"Mode: {mode}  Path: {path}  Force: {force}")
+
+    if not preflight.check_python_version(logger=logger):
+        sys.exit(1)
+    if not preflight.check_api_keys(TMDB_API_KEY, TVDB_API_KEY, logger=logger):
+        sys.exit(1)
+    if not preflight.check_write_permission(path, logger=logger):
+        sys.exit(1)
+
+    # ── Count items for progress window ───────────────────────────────────────
+    total = sum(
+        1 for e in os.listdir(path)
+        if os.path.isdir(os.path.join(path, e)) and not e.startswith(".")
+    )
+    label = "Movies" if mode == "movies" else "TV Shows"
+    win = preflight.ProgressWindow(
+        title    = f"Plex NFO Creator — {label}",
+        total    = total,
+        log_file = log_file,
+    )
+
+    def work(progress_cb, log_cb, cancel):
+        if mode == "movies":
+            result = process_movies(path, force,
+                                    progress_cb=progress_cb,
+                                    log_cb=log_cb,
+                                    cancel=cancel)
+        else:
+            result = process_tvshows(path, force,
+                                     progress_cb=progress_cb,
+                                     log_cb=log_cb,
+                                     cancel=cancel)
+        done, errors, skipped = result
+        logger.info(f"Finished — done={done} errors={errors} skipped={skipped}")
+        preflight.notify(
+            "Plex NFO Creator — Complete",
+            f"{label}: {done} done, {errors} errors, {skipped} skipped.",
+        )
+        return done, errors, skipped
+
+    win.run(work)
 
 
 if __name__ == "__main__":
