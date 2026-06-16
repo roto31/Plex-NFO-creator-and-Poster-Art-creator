@@ -4,8 +4,8 @@ Movie Folder & File Renamer
 Strips leading numbers, quality tags, and junk from movie folder names and video filenames.
 
 Usage:
-    python3 rename_movies.py "/Volumes/iTunes 5/Movies"           # dry run (preview only)
-    python3 rename_movies.py "/Volumes/iTunes 5/Movies" --rename  # actually rename
+    python3 rename_movies.py "/path/to/Movies"           # dry run (preview only)
+    python3 rename_movies.py "/path/to/Movies" --rename  # actually rename
 
 Always run dry run first to verify before committing changes.
 """
@@ -190,7 +190,7 @@ def process_movies(movies_dir, dry_run=True):
         print(f"  Files renamed:   {renamed_files}")
         print(f"  Unchanged:       {unchanged}")
         print(f"\nNext step: Re-run the scraper to generate .nfo files for renamed folders:")
-        print(f'  python3 "/Users/roto1231/XCode Projects/scraper.py" movies "/Volumes/iTunes 5/Movies"')
+        print(f'  python3 scraper.py movies "/path/to/Movies"')
 
 
 if __name__ == '__main__':

@@ -5,9 +5,9 @@ Generates .nfo files for movies (TMDB) and TV shows (TVDB).
 Uses 4 parallel workers and fuzzy title matching for better coverage.
 
 Usage:
-    python3 scraper.py movies "YOUR_MOVIES_VOLUME PATH"
-    python3 scraper.py tvshows "YOUR_TV_SHOWS_PATH"
-    python3 scraper.py movies "/path" --force
+    python3 scraper.py movies "/path/to/Movies"
+    python3 scraper.py tvshows "/path/to/TV Shows"
+    python3 scraper.py movies "/path/to/Movies" --force
 """
 
 import sys
@@ -26,8 +26,8 @@ from xml.dom import minidom
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
-TMDB_API_KEY = "YOUR_TMDB_API_KEY"
-TVDB_API_KEY = "YOUR_TVDB_APLI_KEY"
+TMDB_API_KEY = "your_tmdb_api_key_here"
+TVDB_API_KEY = "your_tvdb_api_key_here"
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 TVDB_BASE = "https://api4.thetvdb.com/v4"

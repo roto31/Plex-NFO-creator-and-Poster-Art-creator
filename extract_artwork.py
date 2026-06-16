@@ -4,10 +4,10 @@ Plex Artwork Extractor
 Extracts embedded cover art from MP4/MKV files and saves as sidecar poster.jpg files.
 
 Usage:
-    python3 extract_artwork.py movies "/Volumes/iTunes 5/Movies"            # dry run
-    python3 extract_artwork.py movies "/Volumes/iTunes 5/Movies" --extract  # extract
-    python3 extract_artwork.py tvshows "/Volumes/iTunes 5/TV Shows"         # dry run
-    python3 extract_artwork.py tvshows "/Volumes/iTunes 5/TV Shows" --extract
+    python3 extract_artwork.py movies "/path/to/Movies"            # dry run
+    python3 extract_artwork.py movies "/path/to/Movies" --extract  # extract
+    python3 extract_artwork.py tvshows "/path/to/TV Shows"         # dry run
+    python3 extract_artwork.py tvshows "/path/to/TV Shows" --extract
 
 Add --force to re-extract even if poster.jpg already exists.
 """
