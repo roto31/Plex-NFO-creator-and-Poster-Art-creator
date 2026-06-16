@@ -3,11 +3,17 @@
 Plex Artwork Extractor
 Extracts embedded cover art from MP4/MKV files and saves as sidecar poster.jpg files.
 
-Usage:
+Compatible with macOS, Linux, and Windows (Python 3.8+). Requires ffmpeg in PATH.
+
+Usage (macOS / Linux):
     python3 extract_artwork.py movies "/path/to/Movies"            # dry run
     python3 extract_artwork.py movies "/path/to/Movies" --extract  # extract
     python3 extract_artwork.py tvshows "/path/to/TV Shows"         # dry run
     python3 extract_artwork.py tvshows "/path/to/TV Shows" --extract
+
+Usage (Windows):
+    python extract_artwork.py movies "D:\\Media\\Movies" --extract
+    python extract_artwork.py tvshows "D:\\Media\\TV Shows" --extract
 
 Add --force to re-extract even if poster.jpg already exists.
 """
@@ -16,11 +22,39 @@ import sys
 import os
 import re
 import subprocess
+import platform
+
+# ─── Cross-platform UTF-8 output ──────────────────────────────────────────────
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 VIDEO_EXTS = {'.mkv', '.mp4', '.mov', '.avi', '.m4v'}
 
 
 # ─── ffmpeg check ─────────────────────────────────────────────────────────────
+
+def _ffmpeg_install_hint():
+    """Return platform-appropriate ffmpeg install instructions."""
+    system = platform.system()
+    if system == "Darwin":
+        return "  Install with: brew install ffmpeg"
+    elif system == "Windows":
+        return (
+            "  Install from: https://ffmpeg.org/download.html#build-windows\n"
+            "  Or via winget:      winget install ffmpeg\n"
+            "  Or via Chocolatey:  choco install ffmpeg\n"
+            "  After installing, ensure ffmpeg.exe is on your PATH."
+        )
+    else:  # Linux
+        return (
+            "  Debian / Ubuntu:  sudo apt install ffmpeg\n"
+            "  Fedora / RHEL:    sudo dnf install ffmpeg\n"
+            "  Arch:             sudo pacman -S ffmpeg"
+        )
+
 
 def check_ffmpeg():
     try:
@@ -332,9 +366,8 @@ def process_tvshows(root_dir, extract, force):
 
 def main():
     if not check_ffmpeg():
-        print("❌ ffmpeg not found.")
-        print("Install it with: brew install ffmpeg")
-        print("Then re-run this script.")
+        print("❌ ffmpeg not found. ffmpeg must be installed and available on your PATH.")
+        print(_ffmpeg_install_hint())
         sys.exit(1)
 
     args = sys.argv[1:]

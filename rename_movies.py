@@ -3,9 +3,15 @@
 Movie Folder & File Renamer
 Strips leading numbers, quality tags, and junk from movie folder names and video filenames.
 
-Usage:
+Compatible with macOS, Linux, and Windows (Python 3.8+).
+
+Usage (macOS / Linux):
     python3 rename_movies.py "/path/to/Movies"           # dry run (preview only)
     python3 rename_movies.py "/path/to/Movies" --rename  # actually rename
+
+Usage (Windows):
+    python rename_movies.py "D:\\Media\\Movies"           # dry run
+    python rename_movies.py "D:\\Media\\Movies" --rename  # apply
 
 Always run dry run first to verify before committing changes.
 """
@@ -14,6 +20,13 @@ import os
 import re
 import sys
 from pathlib import Path
+
+# ─── Cross-platform UTF-8 output ──────────────────────────────────────────────
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Video and metadata file extensions to rename alongside the folder
 RENAME_EXTENSIONS = {'.mkv', '.mp4', '.mov', '.avi', '.m4v', '.nfo', '.jpg', '.png', '.srt', '.sub'}
@@ -102,7 +115,9 @@ def rename_item(old_path, new_path, dry_run=True):
         print(f"             → {os.path.basename(new_path)}")
     else:
         try:
-            os.rename(old_path, new_path)
+            # os.replace is atomic and works on all platforms including Windows,
+            # where os.rename raises FileExistsError if the destination exists.
+            os.replace(old_path, new_path)
             print(f"  RENAMED: {os.path.basename(old_path)}")
             print(f"       → {os.path.basename(new_path)}")
         except Exception as e:

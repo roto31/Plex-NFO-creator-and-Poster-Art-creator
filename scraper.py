@@ -4,10 +4,17 @@ Plex NFO Metadata Scraper
 Generates .nfo files for movies (TMDB) and TV shows (TVDB).
 Uses 4 parallel workers and fuzzy title matching for better coverage.
 
-Usage:
+Compatible with macOS, Linux, and Windows (Python 3.8+).
+
+Usage (macOS / Linux):
     python3 scraper.py movies "/path/to/Movies"
     python3 scraper.py tvshows "/path/to/TV Shows"
     python3 scraper.py movies "/path/to/Movies" --force
+
+Usage (Windows):
+    python scraper.py movies "D:\\Media\\Movies"
+    python scraper.py tvshows "D:\\Media\\TV Shows"
+    python scraper.py movies "D:\\Media\\Movies" --force
 """
 
 import sys
@@ -23,6 +30,16 @@ import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from xml.etree.ElementTree import Element, SubElement, tostring, parse as parse_xml
 from xml.dom import minidom
+
+# ─── Cross-platform UTF-8 output ──────────────────────────────────────────────
+# Windows cmd/PowerShell defaults to cp1252 which cannot render ✓ ❌ ⏭ etc.
+# Reconfigure stdout to UTF-8 so output is consistent on all platforms.
+# On macOS/Linux this is a no-op (stdout is already UTF-8).
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
