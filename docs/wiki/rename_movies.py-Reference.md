@@ -6,6 +6,8 @@
 
 This script strips that noise. It **always runs as a dry run by default** — you must explicitly pass `--rename` to make any changes.
 
+On startup, `rename_movies.py` runs preflight checks via [`preflight.py`](preflight.py-Reference): Python version check, and (when `--rename` is active) write permission on the target directory. A progress window with a real-time log opens before processing begins.
+
 ---
 
 ## Command Line Interface
@@ -119,6 +121,8 @@ Patterns detected: `Part N`, `Part I/II/III`, `Disc N`, `N of M`, `Vol N`, `Vol.
 
 Files inside a folder are renamed **before** the folder itself. This avoids `FileNotFoundError` caused by the old folder path becoming invalid before its contents are renamed.
 
+`os.replace()` is used instead of `os.rename()` for cross-platform compatibility — `os.replace()` is atomic and does not raise `FileExistsError` on Windows if the destination already exists.
+
 ---
 
 ## File Types Renamed
@@ -134,9 +138,23 @@ Other files in the folder are left untouched.
 
 ---
 
-## Terminal Output
+## Progress Window & Logging
 
-### Dry Run (default)
+`rename_movies.py` opens a progress window before processing begins. Each folder is logged as it is processed.
+
+The log file location:
+
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Logs/PlexNFOCreator/rename_movies_YYYY-MM-DD_HHMMSS.log` |
+| Linux | `~/.local/share/plex-nfo-creator/logs/rename_movies_YYYY-MM-DD_HHMMSS.log` |
+| Windows | `%APPDATA%\PlexNFOCreator\Logs\rename_movies_YYYY-MM-DD_HHMMSS.log` |
+
+Click **Open Log** in the progress window to open the current run's log.
+
+### Log / Window Output
+
+#### Dry Run (default)
 
 ```
 DRY RUN — No changes will be made
@@ -162,7 +180,7 @@ DRY RUN COMPLETE — Nothing was changed
   Already clean (unchanged):     1713
 ```
 
-### With `--rename`
+#### With `--rename`
 
 ```
 RENAMING FILES
@@ -179,6 +197,20 @@ RENAME COMPLETE
   Files renamed:   52
   Unchanged:       1713
 ```
+
+An OS-native notification is sent when processing completes.
+
+---
+
+## Functions Reference
+
+| Function | Description |
+|----------|-------------|
+| `clean_name(name)` | 6-step name cleaning pipeline; returns cleaned name |
+| `is_multipart(name)` | Returns True for multi-part folder names |
+| `should_rename(original, cleaned)` | Returns True if the name actually changed |
+| `rename_item(old_path, new_path, dry_run, log_fn)` | Rename or preview-rename a file or folder |
+| `process_movies(movies_dir, dry_run, progress_cb, log_cb, cancel)` | Process all movie folders; returns `(done, errors, skipped)` |
 
 ---
 

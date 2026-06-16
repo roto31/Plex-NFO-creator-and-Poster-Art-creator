@@ -4,6 +4,8 @@
 
 `scraper.py` generates Plex-compatible `.nfo` XML metadata sidecar files for movies and TV shows. It queries TMDB for movies and TVDB for TV shows, writes structured XML with `<uniqueid>` tags for precise Plex matching, and runs fully automated with 4 parallel workers and resume-safe skip logic.
 
+On startup, `scraper.py` runs preflight checks via [`preflight.py`](preflight.py-Reference): Python version, API key validation, and write permission on the target directory. A progress window with a real-time log opens before processing begins, and a log file is written to the OS-native log directory for the duration of the run.
+
 ---
 
 ## Command Line Interface
@@ -260,7 +262,21 @@ Source: TVDB `id` for primary; `remoteIds` scanned for `sourceName` containing `
 
 ---
 
-## Terminal Output
+## Progress Window & Logging
+
+`scraper.py` opens a progress window (via `preflight.ProgressWindow`) before processing begins. All per-item output goes to both the scrollable log in the window and the run log file.
+
+The log file location:
+
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Logs/PlexNFOCreator/scraper_YYYY-MM-DD_HHMMSS.log` |
+| Linux | `~/.local/share/plex-nfo-creator/logs/scraper_YYYY-MM-DD_HHMMSS.log` |
+| Windows | `%APPDATA%\PlexNFOCreator\Logs\scraper_YYYY-MM-DD_HHMMSS.log` |
+
+Click **Open Log** in the progress window to open the current run's log in Console.app (macOS) or your default text editor.
+
+### Log / Window Output Format
 
 ```
 [118/1760] ✓  Back to the Future (1985)
@@ -281,6 +297,8 @@ Movies complete
   Skipped: 60
 ============================================================
 ```
+
+An OS-native notification is sent when processing completes.
 
 ---
 
@@ -309,9 +327,9 @@ Movies complete
 | `_tvdb_remote_ids(remote_ids)` | Extract TMDB and IMDb IDs from TVDB remoteIds |
 | `_process_one_movie(args)` | Worker: process one movie folder |
 | `_process_one_show(args)` | Worker: process one TV show |
-| `_process_seasons(show_path, series_id, series_chars, force)` | Process all seasons for a show |
-| `process_movies(root, force)` | Entry point: scan and process all movies |
-| `process_tvshows(root, force)` | Entry point: login TVDB, scan and process all shows |
+| `_process_seasons(show_path, series_id, series_chars, force, log_fn)` | Process all seasons for a show |
+| `process_movies(root, force, progress_cb, log_cb, cancel)` | Entry point: scan and process all movies; returns `(done, errors, skipped)` |
+| `process_tvshows(root, force, progress_cb, log_cb, cancel)` | Entry point: login TVDB, scan and process all shows; returns `(done, errors, skipped)` |
 
 ---
 

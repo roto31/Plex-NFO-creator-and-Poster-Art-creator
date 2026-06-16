@@ -59,6 +59,15 @@ None of the existing tools did all of this. So we built it.
 
 ## What These Scripts Do
 
+### [`preflight.py`](preflight.py)
+
+A shared support module imported by all three scripts. It runs before any processing begins and handles:
+- **Dependency checks:** Python 3.8+, ffmpeg on PATH, API keys set, write permissions
+- **Auto-installation:** if ffmpeg is missing, an OS-native dialog offers to install it via Homebrew, apt, dnf, pacman, winget, or Chocolatey depending on the platform
+- **OS-native notifications and dialogs:** system alerts on completion, platform-native Yes/No dialogs for install consent
+- **Logging:** one timestamped log file per run, written to `~/Library/Logs/PlexNFOCreator/` (macOS), `~/.local/share/plex-nfo-creator/logs/` (Linux), or `%APPDATA%\PlexNFOCreator\Logs\` (Windows)
+- **Progress window:** a dark-themed tkinter GUI with a live progress bar, scrollable log, done/errors/skipped counters, Cancel button, and Open Log button
+
 ### [`scraper.py`](scraper.py)
 
 The core script. For each movie folder, it:
@@ -105,10 +114,11 @@ The 75 movies and 55 TV shows that could not be matched are genuinely not in TMD
 ## Navigation
 
 - **[Installation & Setup](Installation)**
-- **[scraper.py Documentation](scraper.py-Reference)**
-- **[extract_artwork.py Documentation](extract_artwork.py-Reference)**
-- **[rename_movies.py Documentation](rename_movies.py-Reference)**
-- **[Process Flow Diagrams](Diagrams)**
+- **[preflight.py Reference](preflight.py-Reference)** — dependency checks, auto-install, progress window, logging
+- **[scraper.py Reference](scraper.py-Reference)**
+- **[extract_artwork.py Reference](extract_artwork.py-Reference)**
+- **[rename_movies.py Reference](rename_movies.py-Reference)**
+- **[Process Flow Diagrams](Diagrams)** — Mermaid flowcharts for every decision path
 - **[NFO Format Reference](NFO-Format-Reference)**
 - **[Plex Configuration](Plex-Configuration)**
 - **[Troubleshooting](Troubleshooting)**

@@ -8,13 +8,16 @@
 
 This script bridges that gap.
 
+On startup it runs preflight checks (Python version, ffmpeg PATH check with auto-install offer, write permission) via `preflight.py`, then opens a progress window and writes a timestamped log file. See [`preflight.py` Reference](preflight.md) for details.
+
 ---
 
 ## Requirements
 
 - **Python 3.8+**
-- **ffmpeg** — must be installed and in PATH
+- **ffmpeg** — must be installed and in PATH. If not present, the script offers to install it automatically on first run.
   ```bash
+  # Manual install (macOS)
   brew install ffmpeg
   ```
 

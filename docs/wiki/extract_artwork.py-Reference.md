@@ -6,6 +6,8 @@
 
 Embedded MP4 artwork (stored in the `covr` atom) is readable by Apple's TV.app natively. Plex cannot read embedded MP4 artwork — it requires sidecar `poster.jpg` files. This script bridges that gap.
 
+On startup, `extract_artwork.py` runs preflight checks via [`preflight.py`](preflight.py-Reference): Python version, ffmpeg PATH check (with auto-install offer if missing), and write permission on the target directory. A progress window with a real-time log opens before processing begins.
+
 ---
 
 ## Command Line Interface
@@ -40,15 +42,9 @@ python3 extract_artwork.py movies "/Volumes/iTunes 5/Movies" --extract --force
 
 ## Requirement: ffmpeg
 
-This script requires `ffmpeg` in your PATH. Installation:
+This script requires `ffmpeg` in your PATH. On first run without ffmpeg, a system dialog appears offering to install it automatically. See [Installation → Step 4](Installation#step-4--ffmpeg-for-extract_artworkpy-only) for details.
 
-```bash
-brew install ffmpeg
-```
-
-Verify: `ffmpeg -version`
-
-The script calls `check_ffmpeg()` on startup and exits with instructions if ffmpeg is not found.
+> **PATH requirement:** The script uses `shutil.which("ffmpeg")` to find ffmpeg — the same as the shell. If ffmpeg is not on PATH, the script cannot find it regardless of where it is installed on disk. Open a new terminal after manual installation.
 
 ---
 
@@ -146,44 +142,43 @@ Like `scraper.py`, this script uses `is_multipart()` to detect multi-part movie 
 
 ---
 
-## Terminal Output
+## Progress Window & Logging
 
-### Dry Run
+`extract_artwork.py` opens a progress window before processing begins. Each item's result is shown in the scrollable log and written to the run's log file.
 
-```
-DRY RUN — run with --extract to write files
-============================================================
-[Movies] Scanning: /Volumes/iTunes 5/Movies
-[  1/1760] WOULD EXTRACT poster: Back to the Future (1985)
-[  2/1760] WOULD EXTRACT poster: Batman (1989)
-[  3/1760] ⏭ SKIP: poster exists: Batman Begins (2005)
-...
-============================================================
-DRY run complete — 1692 would be extracted, 60 would be skipped
-```
+The log file location:
 
-### With --extract
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Logs/PlexNFOCreator/extract_artwork_YYYY-MM-DD_HHMMSS.log` |
+| Linux | `~/.local/share/plex-nfo-creator/logs/extract_artwork_YYYY-MM-DD_HHMMSS.log` |
+| Windows | `%APPDATA%\PlexNFOCreator\Logs\extract_artwork_YYYY-MM-DD_HHMMSS.log` |
+
+Click **Open Log** in the progress window to open it in Console.app (macOS) or your default text editor.
+
+### Log / Window Output
 
 ```
-============================================================
-[  1/1760] ✓ poster: Back to the Future (1985)
-[  2/1760] ✓ poster: Batman (1989)
-[  3/1760] ⏭ SKIP: poster exists: Batman Begins (2005)
-[  4/1760] ✗ NO ARTWORK: Some Home Recording (1987)
+[  1/1760] ✓ → poster.jpg  Back to the Future (1985)
+[  2/1760] ✓ → poster.jpg  Batman (1989)
+[  3/1760] ⏭ already exists  Batman Begins (2005)
+[  4/1760] ❌ no embedded artwork  Some Home Recording (1987)
 ```
 
 ### Final Summary (TV Shows)
 
 ```
 ============================================================
-TV Shows complete
-  Show posters:    254
-  Season posters:  843
-  Episode thumbs:  19,754
-  No artwork:      187
-  Skipped:         0
+COMPLETE
+  Show posters extracted:   254
+  Season posters extracted: 843
+  Episode thumbs extracted: 19,754
+  Already existed:          0
+  No embedded artwork:      187
 ============================================================
 ```
+
+An OS-native notification is sent when processing completes.
 
 ---
 
@@ -191,19 +186,19 @@ TV Shows complete
 
 | Function | Description |
 |----------|-------------|
-| `check_ffmpeg()` | Verify ffmpeg is in PATH; exit with instructions if not |
 | `is_multipart(name)` | Returns True for multi-part folder names |
-| `find_video_file(folder)` | Find first video file in a folder |
 | `extract_embedded_artwork(video_path, output_path)` | Try both strategies; return True if successful |
-| `process_movies(root, extract, force)` | Entry point for movies mode |
-| `process_tvshows(root, extract, force)` | Entry point for TV shows mode |
+| `find_video(folder)` | Find first video file in a folder |
+| `find_first_episode(season_path)` | Find first video file in a season folder |
+| `process_movies(root, extract, force, progress_cb, log_cb, cancel)` | Entry point for movies mode; returns `(done, errors, skipped)` |
+| `process_tvshows(root, extract, force, progress_cb, log_cb, cancel)` | Entry point for TV shows mode; returns `(done, errors, skipped)` |
 
 ---
 
 ## Troubleshooting
 
-**"ffmpeg: command not found"**
-Install with `brew install ffmpeg`.
+**ffmpeg not found / check fails**
+Run the script and click Yes when offered auto-install. Or install manually — see [Installation → Step 4](Installation#step-4--ffmpeg-for-extract_artworkpy-only). After manual install, open a new terminal before re-running.
 
 **"Permission denied" writing poster.jpg**
 Add Terminal to Full Disk Access in System Settings → Privacy & Security.
@@ -213,3 +208,6 @@ The file failed the `> 1000 byte` size check on a previous run and was deleted. 
 
 **No artwork extracted from any file**
 Your files may not have been purchased through iTunes or processed with Subler. Files ripped from Blu-ray or downloaded typically do not have embedded poster artwork in the MP4 container.
+
+**Progress window does not appear**
+tkinter is not available. Install it (`brew install python-tk` on macOS, `sudo apt-get install python3-tk` on Linux) and re-run. Processing continues in the terminal without the GUI.

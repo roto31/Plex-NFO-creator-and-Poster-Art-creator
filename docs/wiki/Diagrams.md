@@ -1,6 +1,6 @@
-# Process Flow Diagrams
+# Process & Decision Flow Diagrams
 
-All diagrams are in [Mermaid](https://mermaid.js.org/) format and render natively on GitHub.
+All diagrams are written in [Mermaid](https://mermaid.js.org/) and render natively on GitHub.
 
 ---
 
@@ -25,34 +25,158 @@ flowchart TD
 
 ---
 
-## 2. scraper.py — Top-Level Flow
+## 2. preflight.py — Startup Check Sequence
+
+Every script runs these checks before opening the progress window.
 
 ```mermaid
 flowchart TD
-    A([Start]) --> B{Mode?}
-    B -- movies --> C[Scan movie root dir]
-    B -- tvshows --> D[TVDB Login\nget JWT token]
-    D --> E[Scan TV Shows root dir]
-
-    C --> F[Sort folders A–Z]
-    E --> G[Sort shows A–Z]
-
-    F --> H[ThreadPoolExecutor\n4 workers]
-    G --> I[ThreadPoolExecutor\n4 workers]
-
-    H --> J[_process_one_movie\nper folder]
-    I --> K[_process_one_show\nper show]
-
-    J --> L[Aggregate results\ndone / errors / skipped]
-    K --> L
-
-    L --> M[Print summary]
-    M --> N([End])
+    A([Script launched]) --> B[setup_logging\ncreate log file]
+    B --> C[check_python_version\n≥ 3.8?]
+    C -- Fail --> Z1[❌ Exit: Python too old]
+    C -- Pass --> D{Script needs\nAPI keys?}
+    D -- Yes --> E[check_api_keys\nTMDB + TVDB set?]
+    E -- Fail --> Z2[❌ Exit: keys not set]
+    E -- Pass --> F{Script needs\nffmpeg?}
+    D -- No --> F
+    F -- Yes --> G[check_ffmpeg\nshutil.which ffmpeg]
+    G -- Found --> H{Writing\nfiles?}
+    G -- Not found --> I[ffmpeg missing flow\nsee Diagram 3]
+    I -- Installed OK --> H
+    I -- Not installed --> Z3[❌ Exit: ffmpeg required]
+    F -- No --> H
+    H -- Yes --> J[check_write_permission\ntest write to path]
+    J -- Fail --> Z4[❌ Exit: no write access]
+    J -- Pass --> K[All checks passed\nopen ProgressWindow]
+    H -- No --> K
+    K --> L([Begin processing])
 ```
 
 ---
 
-## 3. scraper.py — Movie Processing (per folder)
+## 3. preflight.py — ffmpeg Missing: Install Decision Flow
+
+```mermaid
+flowchart TD
+    A([ffmpeg not on PATH]) --> B[OS-native notification:\nffmpeg is required]
+    B --> C[OS-native dialog:\nInstall automatically?]
+    C -- Yes --> D{Platform?}
+    D -- macOS --> E{Homebrew\ninstalled?}
+    E -- No --> F[Install Homebrew\nfrom brew.sh]
+    F --> G[brew install ffmpeg]
+    E -- Yes --> G
+    D -- Linux --> H{Package manager?}
+    H -- apt --> I[apt-get install ffmpeg]
+    H -- dnf --> J[dnf install ffmpeg]
+    H -- pacman --> K[pacman -S ffmpeg]
+    H -- zypper --> L[zypper install ffmpeg]
+    H -- brew --> G
+    D -- Windows --> M{winget\navailable?}
+    M -- Yes --> N[winget install ffmpeg]
+    M -- No --> O[choco install ffmpeg]
+    I & J & K & L & N & O --> P[Re-check PATH]
+    P -- Found --> Q([✓ ffmpeg ready])
+    P -- Not found --> R[Print PATH instructions\nopen download page\nin browser]
+    R --> Z([❌ Exit])
+    C -- No --> R
+```
+
+---
+
+## 4. preflight.py — Progress Window Threading Model
+
+```mermaid
+sequenceDiagram
+    participant Main as Main Thread
+    participant Queue as queue.Queue
+    participant Worker as Worker Thread
+    participant UI as tkinter UI
+
+    Main->>UI: build_ui() — create widgets
+    Main->>Worker: Thread(target=work_fn).start()
+    Main->>UI: root.after(100, _poll)
+    Main->>UI: root.mainloop() [blocks]
+
+    loop Every 100ms
+        UI->>Queue: _poll() — drain messages
+        Queue-->>UI: progress update / log line / done signal
+        UI->>UI: update progress bar, counters, log
+    end
+
+    loop Per item
+        Worker->>Queue: put(progress_update)
+        Worker->>Queue: put(log_line)
+        Worker->>Worker: check cancel() flag
+    end
+
+    Worker->>Queue: put(done_signal)
+    Queue-->>UI: _poll() sees done
+    UI->>UI: show final counts
+    UI->>Main: root.quit()
+    Main-->>Main: mainloop() returns
+    Main->>Main: return (done, errors, skipped)
+```
+
+---
+
+## 5. preflight.py — Log File Lifecycle
+
+```mermaid
+flowchart LR
+    A([Script starts]) --> B[log_directory\nplatform path]
+    B --> C[mkdir -p\nif not exists]
+    C --> D[filename:\nscript_YYYY-MM-DD_HHMMSS.log]
+    D --> E[FileHandler\n+ StreamHandler stderr]
+    E --> F[Logger ready]
+    F --> G{Processing\nruns}
+    G --> H[All items logged\nto file + stderr]
+    H --> I([Run ends])
+    I --> J{Open Log\nbutton clicked?}
+    J -- Yes --> K{Platform?}
+    K -- macOS --> L[open -a Console.app\nlog_file]
+    K -- Linux --> M[xdg-open log_file]
+    K -- Windows --> N[notepad log_file]
+    J -- No --> O([Log persists\nfor future reference])
+```
+
+---
+
+## 6. scraper.py — Top-Level Flow (v1.2)
+
+```mermaid
+flowchart TD
+    A([Start]) --> B[preflight checks\nPython + API keys + write perm]
+    B --> C[setup_logging scraper]
+    C --> D{Mode?}
+    D -- movies --> E[Count movie folders]
+    D -- tvshows --> F[TVDB Login\nget JWT token]
+    F --> G[Count TV show folders]
+
+    E --> H[ProgressWindow\ntitle + total + log_file]
+    G --> H
+
+    H --> I[work closure defined]
+    I --> J[win.run work]
+
+    J --> K[ThreadPoolExecutor\n4 workers + as_completed]
+    K -- movies --> L[_process_one_movie\nper folder]
+    K -- tvshows --> M[_process_one_show\nper show]
+
+    L & M --> N[progress_cb per item\nupdate bar + counters]
+    N --> O[log_cb per item\nwrite to window + file]
+    O --> P{cancel?}
+    P -- Yes --> Q[Stop submitting\nnew work]
+    P -- No --> K
+
+    K --> R[Aggregate done / errors / skipped]
+    R --> S[logger.info Finished]
+    S --> T[notify completion]
+    T --> U([Window shows\nfinal counts])
+```
+
+---
+
+## 7. scraper.py — Movie Processing (per folder)
 
 ```mermaid
 flowchart TD
@@ -78,7 +202,7 @@ flowchart TD
 
 ---
 
-## 4. scraper.py — TV Show Processing (per show)
+## 8. scraper.py — TV Show Processing (per show)
 
 ```mermaid
 flowchart TD
@@ -101,7 +225,7 @@ flowchart TD
 
 ---
 
-## 5. scraper.py — Season & Episode Processing
+## 9. scraper.py — Season & Episode Processing
 
 ```mermaid
 flowchart TD
@@ -131,7 +255,7 @@ flowchart TD
 
 ---
 
-## 6. scraper.py — Fuzzy Title Matching
+## 10. scraper.py — Fuzzy Title Matching
 
 ```mermaid
 flowchart LR
@@ -164,17 +288,37 @@ flowchart LR
 
 ---
 
-## 7. extract_artwork.py — Movie Mode Flow
+## 11. extract_artwork.py — Startup Flow (v1.2)
 
 ```mermaid
 flowchart TD
-    A([Start]) --> B{ffmpeg installed?}
-    B -- No --> C[❌ Print install\ninstructions & exit]
-    B -- Yes --> D[Scan movie folders]
+    A([Start]) --> B[preflight checks\nPython + ffmpeg + write perm]
+    B --> C[setup_logging extract_artwork]
+    C --> D[Count folders]
+    D --> E[ProgressWindow\ntitle + total + log_file]
+    E --> F[win.run work]
+    F --> G{Mode?}
+    G -- movies --> H[process_movies\nwith callbacks]
+    G -- tvshows --> I[process_tvshows\nwith callbacks]
+    H & I --> J[Return done / errors / skipped]
+    J --> K[logger.info Finished]
+    K --> L[notify completion]
+    L --> M([Window shows\nfinal counts])
+```
+
+---
+
+## 12. extract_artwork.py — Movie Mode Flow
+
+```mermaid
+flowchart TD
+    A([Start]) --> D[Scan movie folders]
     D --> E{More folders?}
     E -- No --> F[Print summary]
     F --> G([End])
-    E -- Yes --> H{is_multipart?}
+    E -- Yes --> CA{cancel?}
+    CA -- Yes --> G
+    CA -- No --> H{is_multipart?}
     H -- Yes --> I[⏭ Skip]
     I --> E
     H -- No --> J{poster.jpg exists\nAND not --force?}
@@ -188,18 +332,18 @@ flowchart TD
     O --> E
     N -- Yes --> P[Strategy 1:\nffmpeg -map 0:v:1]
     P --> Q{Success?\nfile > 1KB?}
-    Q -- Yes --> R[✓ poster.jpg saved]
+    Q -- Yes --> R[✓ poster.jpg saved\nprogress_cb done]
     R --> E
     Q -- No --> S[Strategy 2:\nffmpeg attached_pic]
     S --> T{Success?}
     T -- Yes --> R
-    T -- No --> U[❌ No embedded artwork]
+    T -- No --> U[❌ No embedded artwork\nprogress_cb error]
     U --> E
 ```
 
 ---
 
-## 8. extract_artwork.py — TV Show Mode Flow
+## 13. extract_artwork.py — TV Show Mode Flow
 
 ```mermaid
 flowchart TD
@@ -224,38 +368,63 @@ flowchart TD
     N -- Yes --> L
     N -- No --> Q{More seasons?}
     Q -- Yes --> G
-    Q -- No --> R([Done with show])
+    Q -- No --> R[progress_cb done\nfor this show]
+    R --> S([Done with show])
 ```
 
 ---
 
-## 9. rename_movies.py — Decision Flow
+## 14. rename_movies.py — Startup Flow (v1.2)
 
 ```mermaid
 flowchart TD
-    A([Folder]) --> B{is_multipart?}
-    B -- Yes --> C[⏭ Skip entirely]
+    A([Start]) --> B[preflight checks\nPython version]
+    B --> C{--rename flag?}
+    C -- Yes --> D[check_write_permission]
+    D -- Fail --> Z[❌ Exit]
+    D -- Pass --> E[setup_logging rename_movies]
+    C -- No --> E
+    E --> F[Count folders]
+    F --> G[ProgressWindow\ntitle + total + log_file]
+    G --> H[win.run work]
+    H --> I[process_movies\nwith callbacks]
+    I --> J[Return done / errors / skipped]
+    J --> K[notify completion]
+    K --> L([Window shows\nfinal counts])
+```
+
+---
+
+## 15. rename_movies.py — Decision Flow
+
+```mermaid
+flowchart TD
+    A([Folder]) --> CA{cancel?}
+    CA -- Yes --> Z([Stop])
+    CA -- No --> B{is_multipart?}
+    B -- Yes --> C[⏭ Skip entirely\nprogress_cb skipped]
     B -- No --> D[clean_name\nfolder_name]
     D --> E{Name changed?}
-    E -- No --> F[Count as unchanged]
+    E -- No --> F[Count as unchanged\nprogress_cb skipped]
     E -- Yes --> G[For each file in folder]
     G --> H[clean_name\nfile_name]
     H --> I{File name changed?}
     I -- Yes --> J[Add to rename list]
     I -- No --> G
-    J --> K[Print FOLDER header]
+    J --> K[log_cb FOLDER header]
     K --> L{--rename flag?}
-    L -- No --> M[Print WOULD RENAME]
-    L -- Yes --> N[os.rename files\nfirst]
-    N --> O[os.rename folder]
-    M --> P([Next folder])
-    O --> P
-    F --> P
+    L -- No --> M[log_cb WOULD RENAME\nprogress_cb done]
+    L -- Yes --> N[os.replace files\nfirst]
+    N --> O[os.replace folder]
+    O --> P[log_cb RENAMED\nprogress_cb done]
+    M & P --> Q([Next folder])
+    F --> Q
+    C --> Q
 ```
 
 ---
 
-## 10. clean_title() — Transformation Pipeline
+## 16. clean_title() — Transformation Pipeline
 
 ```mermaid
 flowchart LR
@@ -271,7 +440,7 @@ flowchart LR
 
 ---
 
-## 11. Plex Configuration After Running Scripts
+## 17. Plex Configuration After Running Scripts
 
 ```mermaid
 flowchart TD

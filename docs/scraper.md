@@ -6,6 +6,8 @@
 
 It uses 4 parallel worker threads and fuzzy title matching to maximize coverage without sacrificing accuracy.
 
+On startup it runs preflight checks (Python version, API keys, write permission) via `preflight.py`, then opens a progress window and writes a timestamped log file. See [`preflight.py` Reference](preflight.md) for details.
+
 ---
 
 ## Command Line Interface

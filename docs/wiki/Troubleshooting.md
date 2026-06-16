@@ -2,6 +2,112 @@
 
 ---
 
+## Preflight Issues
+
+### "Python 3.8 or higher is required"
+
+Your system Python is too old. Install a current version from [python.org](https://www.python.org/downloads/).
+
+On macOS you can also use Homebrew:
+```bash
+brew install python
+```
+
+Then use `python3` to invoke scripts.
+
+---
+
+### API keys are not set / "placeholder value detected"
+
+Open `scraper.py` and replace the placeholder values:
+
+```python
+TMDB_API_KEY = "your_actual_tmdb_key_here"
+TVDB_API_KEY = "your_actual_tvdb_key_here"
+```
+
+See [Installation → Step 2](Installation#step-2--get-api-keys) for how to get free API keys.
+
+---
+
+### ffmpeg auto-install dialog does not appear
+
+On Linux, `zenity` (GNOME) or `kdialog` (KDE) is needed for the GUI dialog. If neither is installed, the dialog falls back to a terminal `input()` prompt. Install zenity:
+
+```bash
+sudo apt-get install zenity      # Debian/Ubuntu
+sudo dnf install zenity          # Fedora
+```
+
+On headless systems (no display), the dialog is skipped and you will be asked via the terminal instead.
+
+---
+
+### ffmpeg installed but script still says it is missing
+
+The script uses PATH lookup — `shutil.which("ffmpeg")` — not a filesystem search. If you installed ffmpeg manually, you must open a **new terminal** after installation so the updated PATH takes effect.
+
+Verify ffmpeg is on PATH in the current terminal:
+```bash
+which ffmpeg         # macOS / Linux
+where ffmpeg         # Windows
+ffmpeg -version      # should print version info
+```
+
+If these commands fail, ffmpeg is not on PATH. Check the PATH setup instructions printed by the script, or re-run the auto-installer.
+
+---
+
+### "Permission denied" writing to target directory
+
+On macOS with an external drive, grant Full Disk Access to Terminal:
+1. **System Settings → Privacy & Security → Full Disk Access**
+2. Add your terminal application
+3. Re-run the script
+
+On Linux/Windows, verify the user running the script has write access to the target directory.
+
+---
+
+### Log file not written / log directory not created
+
+The log directory is created automatically on first run. If it fails:
+
+- **macOS:** Check that `~/Library/Logs/` is writable (it normally is for all users)
+- **Linux:** Check that `~/.local/share/` is writable
+- **Windows:** Check that `%APPDATA%` is accessible
+
+If the log directory cannot be created, processing still runs but output goes to stderr only.
+
+---
+
+### Progress window does not appear / tkinter error
+
+tkinter is included with most Python distributions but not all.
+
+**macOS:** Install via Homebrew: `brew install python-tk` (the system Python on macOS does not include tkinter)
+
+**Linux:** `sudo apt-get install python3-tk` (Debian/Ubuntu) or `sudo dnf install python3-tkinter` (Fedora)
+
+**Windows:** Reinstall Python from [python.org](https://www.python.org/downloads/) and ensure "tcl/tk and IDLE" is checked during installation.
+
+If tkinter cannot be loaded, the script falls back to terminal output and continues normally.
+
+---
+
+### Notifications do not appear
+
+**macOS:** Notification Center permission is required. macOS prompts for this on first use. If you dismissed the prompt:
+1. Open **System Settings → Notifications**
+2. Find **Script Editor** or **Terminal** in the list
+3. Enable notifications
+
+**Linux:** `notify-send` must be installed: `sudo apt-get install libnotify-bin`
+
+**Windows:** Notifications require PowerShell 5+ (included in Windows 10/11). If PowerShell is restricted by policy, notifications are silently skipped.
+
+---
+
 ## scraper.py Issues
 
 ### "401 Unauthorized" from TVDB
@@ -18,7 +124,7 @@ Check you are using a **Project API Key** from `https://thetvdb.com/api-informat
 
 **Cause:** The folder name contains noise that survives all 8 fuzzy matching passes, or the film is not in TMDB.
 
-**Diagnosis:** Check what folder name the script is searching. The script logs the folder name for each error.
+**Diagnosis:** Check the log file for that item's entry — the log shows the folder name the script searched.
 
 **Common causes:**
 - Foreign language title in the folder but English title in TMDB
@@ -70,13 +176,11 @@ If TMDB returns HTTP 429:
 
 ## extract_artwork.py Issues
 
-### "ffmpeg: command not found"
+### "ffmpeg: command not found" / ffmpeg check fails
 
-```bash
-brew install ffmpeg
-```
+Run the script and click **Yes** when asked to auto-install, or follow the manual install instructions at [Installation → Step 4](Installation#step-4--ffmpeg-for-extract_artworkpy-only).
 
-Verify: `ffmpeg -version`
+Remember: ffmpeg must be on PATH, not just downloaded. Open a new terminal after manual installation.
 
 ---
 
@@ -149,6 +253,23 @@ Not recognized: `Series 1`, `S01`, `Year 1`, `Part 1`
 ---
 
 ## Getting More Information
+
+### Check the log file
+
+Every run writes a log file. The **Open Log** button in the progress window opens it directly.
+
+Manual paths:
+```bash
+# macOS
+ls ~/Library/Logs/PlexNFOCreator/
+cat ~/Library/Logs/PlexNFOCreator/scraper_2026-06-16_143022.log
+
+# Linux
+ls ~/.local/share/plex-nfo-creator/logs/
+
+# Windows (PowerShell)
+dir $env:APPDATA\PlexNFOCreator\Logs\
+```
 
 ### Check what NFO was written
 

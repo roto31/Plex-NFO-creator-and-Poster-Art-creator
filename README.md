@@ -1,6 +1,6 @@
 # Plex NFO Creator & Poster Art Extractor
 
-A suite of three Python scripts that generate Plex-compatible `.nfo` metadata files and extract embedded poster artwork from your local media library — no GUI required, fully automated, resume-safe.
+A suite of Python scripts that generate Plex-compatible `.nfo` metadata files and extract embedded poster artwork from your local media library — no GUI required, fully automated, resume-safe, and cross-platform (macOS, Linux, Windows).
 
 > **Built because Plex's built-in metadata matching stopped working reliably on large libraries.** See the [full story on the Wiki →](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki)
 
@@ -13,18 +13,18 @@ A suite of three Python scripts that generate Plex-compatible `.nfo` metadata fi
 | [`scraper.py`](scraper.py) | Queries TMDB / TVDB and generates `.nfo` sidecar files for every movie, show, season, and episode |
 | [`extract_artwork.py`](extract_artwork.py) | Extracts embedded cover art from MP4/M4V files and saves as `poster.jpg` sidecar files |
 | [`rename_movies.py`](rename_movies.py) | Cleans folder and file names (strips quality tags, leading numbers, junk) before scraping |
+| [`preflight.py`](preflight.py) | Shared module: dependency checks, auto-install, OS-native notifications, progress window, and logging |
 
 ---
 
 ## Requirements
 
-- **Python 3.8+** (pre-installed on macOS)
-- **ffmpeg** — required by `extract_artwork.py` only
-  ```bash
-  brew install ffmpeg
-  ```
+- **Python 3.8+** (pre-installed on macOS; available at [python.org](https://www.python.org/downloads/) for Windows/Linux)
+- **ffmpeg** — required by `extract_artwork.py` only; the script will offer to install it automatically on first run
 - **TMDB API key** — free at [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)
 - **TVDB API key** — free at [thetvdb.com/api-information](https://thetvdb.com/api-information)
+
+No third-party Python packages required — standard library only.
 
 ---
 
@@ -40,7 +40,7 @@ cd Plex-NFO-creator-and-Poster-Art-creator
 #    TVDB_API_KEY = "your_key_here"
 
 # 3. (Optional) Clean up folder names first
-python3 rename_movies.py "/Volumes/YourDrive/Movies"           # dry run
+python3 rename_movies.py "/Volumes/YourDrive/Movies"           # dry run preview
 python3 rename_movies.py "/Volumes/YourDrive/Movies" --rename  # apply
 
 # 4. Generate NFO metadata files
@@ -51,6 +51,60 @@ python3 scraper.py tvshows "/Volumes/YourDrive/TV Shows"
 python3 extract_artwork.py movies  "/Volumes/YourDrive/Movies"  --extract
 python3 extract_artwork.py tvshows "/Volumes/YourDrive/TV Shows" --extract
 ```
+
+On first run, each script performs a **preflight check** that verifies all requirements are met. If ffmpeg is missing, a dialog appears offering to install it automatically.
+
+---
+
+## What Happens When You Run a Script
+
+### 1. Preflight Checks
+
+Before any processing begins, each script checks:
+
+| Check | Scripts |
+|-------|---------|
+| Python 3.8+ | All |
+| TMDB + TVDB API keys set | `scraper.py` only |
+| ffmpeg on PATH | `extract_artwork.py` only |
+| Write permission on target directory | All (when writing files) |
+
+If a check fails, you get a clear error message explaining what is missing and how to fix it.
+
+### 2. Auto-Install (if ffmpeg is missing)
+
+An OS-native dialog asks whether to install ffmpeg automatically:
+- **macOS:** installs via Homebrew (installs Homebrew first if needed)
+- **Linux:** uses `apt`, `dnf`, `pacman`, `zypper`, or Homebrew
+- **Windows:** uses `winget` or Chocolatey
+- **If you choose No:** detailed PATH setup instructions are printed and the ffmpeg download page opens in your browser
+
+### 3. Progress Window
+
+A dark-themed GUI window shows real-time progress:
+- Progress bar with item count
+- Done / Errors / Skipped counters
+- Scrollable timestamped log
+- Cancel button
+- Open Log button
+
+If tkinter is unavailable (headless server), output falls back to the terminal.
+
+### 4. Log Files
+
+Every run writes a timestamped log file that persists after the window closes:
+
+| Platform | Location |
+|----------|----------|
+| macOS | `~/Library/Logs/PlexNFOCreator/` |
+| Linux | `~/.local/share/plex-nfo-creator/logs/` |
+| Windows | `%APPDATA%\PlexNFOCreator\Logs\` |
+
+On macOS, logs open in Console.app. The **Open Log** button in the progress window opens the current run's log.
+
+### 5. Completion Notification
+
+An OS-native system notification appears when processing finishes, showing the done/errors/skipped summary.
 
 ---
 
@@ -119,9 +173,36 @@ python3 rename_movies.py <path> --rename  # apply renames
 
 ---
 
+## Platform Support
+
+| Feature | macOS | Linux | Windows |
+|---------|-------|-------|---------|
+| NFO generation | ✓ | ✓ | ✓ |
+| Artwork extraction | ✓ | ✓ | ✓ |
+| Folder renaming | ✓ | ✓ | ✓ |
+| Auto-install ffmpeg | Homebrew | apt/dnf/pacman/zypper | winget/choco |
+| Native notifications | Notification Center | notify-send | System tray |
+| Native dialogs | AppleScript | zenity / kdialog | PowerShell |
+| Log viewer | Console.app | text editor | Notepad |
+
+---
+
 ## Documentation
 
 Full documentation, Mermaid process diagrams, NFO format reference, and troubleshooting guide are in the [Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki).
+
+| Page | Contents |
+|------|----------|
+| [Installation & Setup](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Installation) | Requirements, API keys, first-run walkthrough |
+| [preflight.py Reference](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/preflight.py-Reference) | All checks, auto-install, log format, progress window API |
+| [scraper.py Reference](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/scraper.py-Reference) | NFO format, fuzzy matching, API usage |
+| [extract_artwork.py Reference](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/extract_artwork.py-Reference) | Extraction strategies, TV show artwork structure |
+| [rename_movies.py Reference](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/rename_movies.py-Reference) | Cleaning rules, what is and isn't renamed |
+| [Process Flow Diagrams](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Diagrams) | Mermaid flowcharts for every decision path |
+| [NFO Format Reference](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/NFO-Format-Reference) | XML structure, all supported fields |
+| [Plex Configuration](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Plex-Configuration) | Agent setup, refresh procedure |
+| [Troubleshooting](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Troubleshooting) | Common errors and fixes |
+| [FAQ](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/FAQ) | Frequently asked questions |
 
 ---
 

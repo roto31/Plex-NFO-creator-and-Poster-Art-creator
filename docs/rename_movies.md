@@ -8,6 +8,8 @@ This script strips that noise so `scraper.py` can find the correct match.
 
 **Always run `scraper.py` after `rename_movies.py`** — renamed folders need fresh NFO files.
 
+On startup it runs preflight checks (Python version, and write permission when `--rename` is active) via `preflight.py`, then opens a progress window and writes a timestamped log file. See [`preflight.py` Reference](preflight.md) for details.
+
 ---
 
 ## Command Line Interface

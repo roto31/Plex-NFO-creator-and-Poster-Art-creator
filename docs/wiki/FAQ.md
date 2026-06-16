@@ -50,6 +50,100 @@ Once NFO files are generated, Plex reads them locally with no internet needed.
 
 ---
 
+**Q: Do these scripts work on Windows and Linux?**
+
+A: Yes. All scripts are cross-platform (macOS, Linux, Windows). The `preflight.py` module handles platform differences for notifications, dialogs, installation, and log file locations. The core processing logic is identical across all platforms.
+
+---
+
+## Preflight & Installation
+
+**Q: What does "preflight" mean?**
+
+A: Before any processing begins, each script runs a set of preflight checks — verifying that Python is a sufficient version, that required tools (ffmpeg) are installed and on PATH, that API keys are set, and that the script has write permission to the target directory. If any check fails, you get a clear explanation and (for ffmpeg) an offer to install automatically.
+
+---
+
+**Q: Do I need to install ffmpeg before running the scripts?**
+
+A: No. When you run `extract_artwork.py` without ffmpeg installed, a dialog appears offering to install it automatically. If you click Yes, the script installs ffmpeg using your platform's native package manager (Homebrew on macOS, apt/dnf/pacman/zypper on Linux, winget/choco on Windows). If you click No, instructions are printed and the ffmpeg download page opens in your browser.
+
+---
+
+**Q: I downloaded ffmpeg manually but the script still says it's missing. Why?**
+
+A: The script uses PATH lookup (`shutil.which("ffmpeg")`) — the same mechanism used by the shell. If you downloaded the ffmpeg binary but did not add its directory to your PATH, the script cannot find it. Open a **new terminal** after installation and run `ffmpeg -version` to verify it's on PATH. If that command fails, ffmpeg is not on PATH regardless of where it's installed on disk.
+
+The auto-installer handles this correctly for all platforms — it installs via package managers that put binaries on PATH automatically.
+
+---
+
+**Q: Will the auto-installer make changes to my system without permission?**
+
+A: No. A dialog always asks before any installation begins. On Linux, the installer runs package manager commands that may require your `sudo` password — this is prompted in the terminal. If you click No in the dialog, nothing is installed and instructions are printed instead.
+
+---
+
+**Q: Can I skip the preflight checks?**
+
+A: There is no flag to skip preflight. The checks are fast (under a second) and are designed to fail clearly rather than fail silently mid-run. If a check is causing a false failure, please open an issue with details.
+
+---
+
+## Progress Window & Logging
+
+**Q: What is the progress window?**
+
+A: When any script starts processing, a dark-themed GUI window opens showing a real-time progress bar, done/errors/skipped counters, a scrollable log of each item processed, a Cancel button, and an Open Log button. It uses tkinter, which is included with most Python installations.
+
+---
+
+**Q: The progress window didn't open — is something wrong?**
+
+A: If tkinter is not available on your Python installation, the script automatically falls back to terminal output. Processing continues normally — you just won't see the GUI. To get tkinter:
+- **macOS:** `brew install python-tk`
+- **Linux:** `sudo apt-get install python3-tk`
+- **Windows:** Reinstall Python from python.org with "tcl/tk and IDLE" checked
+
+---
+
+**Q: Where are the log files stored?**
+
+A: One log file is written per run, with a timestamp in the filename so runs are never overwritten.
+
+| Platform | Location |
+|----------|----------|
+| macOS | `~/Library/Logs/PlexNFOCreator/` |
+| Linux | `~/.local/share/plex-nfo-creator/logs/` |
+| Windows | `%APPDATA%\PlexNFOCreator\Logs\` |
+
+The **Open Log** button in the progress window opens the current run's log file in the OS-native viewer (Console.app on macOS, text editor on Linux/Windows).
+
+---
+
+**Q: How do I open old log files?**
+
+A: Log files are plain text. You can open them in any text editor. On macOS, they also appear in Console.app:
+1. Open Console.app
+2. In the sidebar, expand **Reports**
+3. Expand your home folder → Library → Logs → PlexNFOCreator
+
+On Windows, navigate to `%APPDATA%\PlexNFOCreator\Logs\` in Explorer.
+
+---
+
+**Q: Can I cancel a run mid-way through?**
+
+A: Yes. Click the **Cancel** button in the progress window. The current item finishes processing, then the run stops. Progress made up to that point is saved (`.nfo` files already written remain). Re-running without `--force` will pick up where you left off.
+
+---
+
+**Q: I got a notification when the run finished. Where did it come from?**
+
+A: The preflight module sends an OS-native notification at the end of every run showing the done/errors/skipped counts. On macOS this appears in Notification Center, on Linux via notify-send, and on Windows as a system tray balloon. This is normal behavior.
+
+---
+
 ## API Keys
 
 **Q: Are the API keys free?**
