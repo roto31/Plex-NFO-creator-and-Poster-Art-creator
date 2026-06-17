@@ -319,6 +319,83 @@ Checks:
 
 ---
 
+## Subtitle Download + Embedding
+
+When `subtitles.enabled` is `true` in the config, the generator automatically downloads subtitles for each movie and TV episode after processing its NFO and artwork.
+
+### What gets written
+
+For each video file (`Movie.mp4`, `Show - S01E01.mp4`, etc.):
+
+| Output | Purpose |
+|--------|---------|
+| `{stem}.{lang}.srt` | Plex sidecar — picked up automatically by Local Media Assets |
+| Embedded `mov_text` track in MP4/M4V | Apple TV local media playback — same track type Subler writes |
+
+MKV files receive the sidecar only; `mov_text` embedding requires an MP4/M4V container.
+
+### Language detection
+
+Language is resolved in this order:
+1. `subtitles.language` in config — if not `"auto"`, this value is used directly (e.g., `"en"`, `"fr"`)
+2. macOS `AppleLanguages` system preference (`defaults read -g AppleLanguages`)
+3. Python `locale.getdefaultlocale()` — cross-platform fallback
+4. `"en"` — hard fallback if detection fails
+
+### Subtitle sources
+
+**OpenSubtitles** (primary) — free API key at [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers)
+
+| Account type | Downloads/day |
+|---|---|
+| No account (API key only) | 5 |
+| Free account with credentials | 40 |
+
+**Subdl** (fallback) — no key required; optional API key improves rate limits
+
+Both are tried in order per video file. The script logs `requests_remaining` after each OpenSubtitles download so you can monitor quota.
+
+### Selective skip logic
+
+A video file is skipped if **both** of these are true:
+1. `{stem}.{lang}.srt` sidecar already exists
+2. The video already has an embedded subtitle stream (detected via `ffprobe`)
+
+This means re-runs are zero-cost for already-subtitled files.
+
+### Embed behavior
+
+ffmpeg writes the subtitle as a `mov_text` (tx3g) track — the same format Subler uses — tagged with the ISO 639-2 language code (`eng`, `fra`, etc.) and marked as the default subtitle track. The operation is atomic: ffmpeg writes to a `.tmp.mp4` file first, then replaces the original only after a size sanity check (temp must be ≥ 95% of original).
+
+If ffmpeg is not on PATH, sidecar-only mode is used automatically with a warning logged.
+
+### Configuration
+
+```json
+"subtitles": {
+  "enabled": true,
+  "language": "auto",
+  "sidecar": true,
+  "embed_in_file": true,
+  "opensubtitles": {
+    "api_key": "YOUR_OPENSUBTITLES_API_KEY",
+    "username": "YOUR_OPENSUBTITLES_USERNAME",
+    "password": "YOUR_OPENSUBTITLES_PASSWORD"
+  },
+  "subdl": {
+    "api_key": "YOUR_SUBDL_API_KEY_OR_LEAVE_EMPTY"
+  }
+}
+```
+
+`username` and `password` are optional — omitting them gives anonymous mode (5 downloads/day per IP). With credentials, the limit rises to 40/day per API key. OpenSubtitles API key registration is free and requires no credit card.
+
+### "Now Playing" board note
+
+The `{stem}.{lang}.srt` sidecar placed alongside the video means a future "Now Playing" board can serve synchronized subtitles directly from the local folder — no subtitle API call needed at display time.
+
+---
+
 ## Log Files
 
 The generator writes to the system log at `/var/log/plex-metadata-generator.log` when running with sufficient permissions, and always echoes to stdout. Format:

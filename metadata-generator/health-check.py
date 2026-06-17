@@ -318,7 +318,41 @@ class HealthChecker:
                 print(f"  ⚠️  Plex token not configured")
         except Exception as e:
             print(f"  ❌ Plex check failed: {e}")
-        
+
+        # Test OpenSubtitles (if configured)
+        try:
+            sub_cfg = config.get('subtitles', {})
+            if sub_cfg.get('enabled'):
+                os_key = sub_cfg.get('opensubtitles', {}).get('api_key', '')
+                sd_key = sub_cfg.get('subdl', {})
+                if os_key and 'YOUR_' not in os_key:
+                    r = requests.get(
+                        'https://api.opensubtitles.com/api/v1/infos/user',
+                        headers={'Api-Key': os_key},
+                        timeout=5
+                    )
+                    if r.status_code in (200, 401):  # 401 = valid key, just not logged in
+                        result['opensubtitles'] = True
+                        print(f"  ✅ OpenSubtitles API reachable")
+                    else:
+                        print(f"  ❌ OpenSubtitles API returned {r.status_code}")
+                elif not os_key and not sd_key:
+                    print(f"  ⚠️  subtitles.enabled=true but no provider keys configured")
+                else:
+                    print(f"  ⚠️  OpenSubtitles API key not configured — Subdl only")
+
+                # Check ffmpeg availability for embedding
+                import shutil as _shutil
+                if sub_cfg.get('embed_in_file', True):
+                    if _shutil.which('ffmpeg'):
+                        print(f"  ✅ ffmpeg found (subtitle embedding available)")
+                    else:
+                        print(f"  ⚠️  ffmpeg not found — subtitle embedding disabled, sidecar only")
+            else:
+                print(f"  ℹ️  Subtitles disabled (subtitles.enabled=false)")
+        except Exception as e:
+            print(f"  ❌ Subtitle check failed: {e}")
+
         return result
     
     def check_permissions(self) -> bool:

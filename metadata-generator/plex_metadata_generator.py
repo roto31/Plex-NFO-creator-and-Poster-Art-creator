@@ -6,13 +6,18 @@ movies, and their seasons/episodes. Selective processing: skips items that alrea
 both NFO and all artwork files present.
 """
 
+import io
 import os
 import re
 import sys
 import json
+import locale
+import platform
 import shutil
 import logging
 import sqlite3
+import subprocess
+import zipfile
 import requests
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -59,6 +64,44 @@ _MULTIPART_RE = re.compile(
 def is_multipart(name: str) -> bool:
     """Return True if folder name looks like one disc/part of a multi-part set."""
     return bool(_MULTIPART_RE.search(name))
+
+
+# ---------------------------------------------------------------------------
+# Language detection
+# ---------------------------------------------------------------------------
+
+# ISO 639-1 → ISO 639-2/B (for ffmpeg -metadata:s:s language= tag)
+_LANG2TO3: Dict[str, str] = {
+    'en': 'eng', 'fr': 'fra', 'de': 'deu', 'es': 'spa', 'it': 'ita',
+    'pt': 'por', 'ja': 'jpn', 'ko': 'kor', 'zh': 'zho', 'nl': 'nld',
+    'ru': 'rus', 'ar': 'ara', 'sv': 'swe', 'no': 'nor', 'da': 'dan',
+    'fi': 'fin', 'pl': 'pol', 'tr': 'tur', 'he': 'heb', 'cs': 'ces',
+    'hu': 'hun', 'ro': 'ron', 'uk': 'ukr', 'el': 'ell', 'th': 'tha',
+}
+
+
+def detect_system_language() -> str:
+    """Return ISO 639-1 two-letter language code derived from the OS locale."""
+    # macOS: AppleLanguages pref is the most reliable indicator
+    if platform.system() == 'Darwin':
+        try:
+            out = subprocess.check_output(
+                ['defaults', 'read', '-g', 'AppleLanguages'],
+                text=True, stderr=subprocess.DEVNULL
+            )
+            m = re.search(r'"([a-z]{2})[-_]', out, re.IGNORECASE)
+            if m:
+                return m.group(1).lower()
+        except Exception:
+            pass
+    # Cross-platform: Python locale
+    try:
+        lang_str = locale.getdefaultlocale()[0]
+        if lang_str:
+            return lang_str.split('_')[0].lower()
+    except Exception:
+        pass
+    return 'en'
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +515,359 @@ class FanartTvProvider:
 
 
 # ---------------------------------------------------------------------------
+# Subtitle Providers
+# ---------------------------------------------------------------------------
+
+class OpenSubtitlesProvider:
+    """Download subtitles from OpenSubtitles REST API v1."""
+
+    BASE_URL = 'https://api.opensubtitles.com/api/v1'
+
+    def __init__(self, cfg: dict):
+        self.api_key = cfg.get('api_key', '')
+        self.username = cfg.get('username', '')
+        self.password = cfg.get('password', '')
+        self._token: Optional[str] = None
+
+    def _headers(self) -> dict:
+        h = {'Api-Key': self.api_key, 'Content-Type': 'application/json'}
+        if self._token:
+            h['Authorization'] = f'Bearer {self._token}'
+        return h
+
+    def authenticate(self) -> bool:
+        if not (self.username and self.password):
+            return True  # anonymous mode — API key only
+        try:
+            resp = requests.post(
+                f'{self.BASE_URL}/login',
+                json={'username': self.username, 'password': self.password},
+                headers={'Api-Key': self.api_key, 'Content-Type': 'application/json'},
+                timeout=15
+            )
+            if resp.status_code == 200:
+                self._token = resp.json().get('token')
+                return True
+        except requests.RequestException:
+            pass
+        return False
+
+    def search_movie(self, imdb_id: Optional[str], tmdb_id: Optional[int], lang: str) -> List[dict]:
+        params: dict = {'languages': lang, 'order_by': 'download_count'}
+        if imdb_id:
+            # Strip 'tt' prefix — OpenSubtitles expects numeric IMDb ID
+            params['imdb_id'] = imdb_id.lstrip('t')
+        elif tmdb_id:
+            params['tmdb_id'] = tmdb_id
+            params['type'] = 'movie'
+        else:
+            return []
+        try:
+            resp = requests.get(f'{self.BASE_URL}/subtitles', headers=self._headers(),
+                                params=params, timeout=15)
+            if resp.status_code == 401:
+                self.authenticate()
+                resp = requests.get(f'{self.BASE_URL}/subtitles', headers=self._headers(),
+                                    params=params, timeout=15)
+            resp.raise_for_status()
+            return resp.json().get('data', [])
+        except requests.RequestException as e:
+            logger.debug(f"OpenSubtitles movie search failed: {e}")
+            return []
+
+    def search_episode(self, show_imdb_id: str, season: int, episode: int, lang: str) -> List[dict]:
+        params = {
+            'parent_imdb_id': show_imdb_id.lstrip('t'),
+            'season_number': season,
+            'episode_number': episode,
+            'languages': lang,
+            'order_by': 'download_count',
+        }
+        try:
+            resp = requests.get(f'{self.BASE_URL}/subtitles', headers=self._headers(),
+                                params=params, timeout=15)
+            if resp.status_code == 401:
+                self.authenticate()
+                resp = requests.get(f'{self.BASE_URL}/subtitles', headers=self._headers(),
+                                    params=params, timeout=15)
+            resp.raise_for_status()
+            return resp.json().get('data', [])
+        except requests.RequestException as e:
+            logger.debug(f"OpenSubtitles episode search failed: {e}")
+            return []
+
+    def download(self, candidate: dict) -> Optional[bytes]:
+        """Download SRT bytes for the best file in this candidate."""
+        files = candidate.get('attributes', {}).get('files', [])
+        if not files:
+            return None
+        file_id = files[0].get('file_id')
+        if not file_id:
+            return None
+        try:
+            resp = requests.post(
+                f'{self.BASE_URL}/download',
+                json={'file_id': file_id},
+                headers=self._headers(),
+                timeout=30
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            remaining = data.get('requests_remaining')
+            if remaining is not None:
+                logger.info(f"  OpenSubtitles quota: {remaining} downloads remaining today")
+            link = data.get('link')
+            if not link:
+                return None
+            dl = requests.get(link, timeout=60)
+            dl.raise_for_status()
+            return dl.content
+        except requests.RequestException as e:
+            logger.debug(f"OpenSubtitles download failed: {e}")
+            return None
+
+
+class SubdlProvider:
+    """Download subtitles from Subdl API (fallback)."""
+
+    SEARCH_URL = 'https://api.subdl.com/api/v1/subtitles'
+    DOWNLOAD_BASE = 'https://dl.subdl.com'
+
+    def __init__(self, cfg: dict):
+        self.api_key = cfg.get('api_key', '')
+
+    def _params(self, extra: dict) -> dict:
+        p = {'languages': 'EN', **extra}
+        if self.api_key:
+            p['api_key'] = self.api_key
+        return p
+
+    def search_movie(self, imdb_id: Optional[str], tmdb_id: Optional[int], lang: str) -> List[dict]:
+        params = self._params({'languages': lang.upper()})
+        if imdb_id:
+            params['imdb_id'] = imdb_id  # Subdl wants tt-prefixed ID
+        elif tmdb_id:
+            params['tmdb_id'] = tmdb_id
+            params['type'] = 'movie'
+        else:
+            return []
+        try:
+            resp = requests.get(self.SEARCH_URL, params=params, timeout=15)
+            resp.raise_for_status()
+            return resp.json().get('subtitles', [])
+        except requests.RequestException as e:
+            logger.debug(f"Subdl movie search failed: {e}")
+            return []
+
+    def search_episode(self, show_imdb_id: str, season: int, episode: int, lang: str) -> List[dict]:
+        params = self._params({
+            'imdb_id': show_imdb_id,
+            'season': season,
+            'episode': episode,
+            'languages': lang.upper(),
+        })
+        try:
+            resp = requests.get(self.SEARCH_URL, params=params, timeout=15)
+            resp.raise_for_status()
+            return resp.json().get('subtitles', [])
+        except requests.RequestException as e:
+            logger.debug(f"Subdl episode search failed: {e}")
+            return []
+
+    def download(self, candidate: dict) -> Optional[bytes]:
+        """Download and extract the first SRT from the zip."""
+        url_path = candidate.get('url')
+        if not url_path:
+            return None
+        try:
+            resp = requests.get(f'{self.DOWNLOAD_BASE}{url_path}', timeout=60)
+            resp.raise_for_status()
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                for name in zf.namelist():
+                    if name.lower().endswith('.srt'):
+                        return zf.read(name)
+        except Exception as e:
+            logger.debug(f"Subdl download failed: {e}")
+        return None
+
+
+class SubtitleDownloader:
+    """Orchestrate subtitle download, sidecar writing, and MP4 embedding."""
+
+    def __init__(self, cfg: dict, lang: str):
+        self.lang = lang                              # e.g. 'en'
+        self.lang3 = _LANG2TO3.get(lang, lang)       # e.g. 'eng'
+        self.do_embed = cfg.get('embed_in_file', True)
+        self.do_sidecar = cfg.get('sidecar', True)
+        self.providers: List = []
+
+        os_cfg = cfg.get('opensubtitles', {})
+        if os_cfg.get('api_key'):
+            prov = OpenSubtitlesProvider(os_cfg)
+            prov.authenticate()
+            self.providers.append(prov)
+
+        sd_cfg = cfg.get('subdl')
+        if sd_cfg is not None:
+            self.providers.append(SubdlProvider(sd_cfg if isinstance(sd_cfg, dict) else {}))
+
+    # --- skip checks ---
+
+    def _sidecar_path(self, video_path: Path) -> Path:
+        return video_path.parent / f"{video_path.stem}.{self.lang}.srt"
+
+    def _sidecar_exists(self, video_path: Path) -> bool:
+        return self._sidecar_path(video_path).exists()
+
+    def _embedded_sub_exists(self, video_path: Path) -> bool:
+        """Use ffprobe to detect existing subtitle tracks in the video."""
+        if not shutil.which('ffprobe'):
+            return False
+        try:
+            out = subprocess.check_output(
+                ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+                 '-show_streams', '-select_streams', 's', str(video_path)],
+                text=True, stderr=subprocess.DEVNULL, timeout=30
+            )
+            streams = json.loads(out).get('streams', [])
+            if not streams:
+                return False
+            for s in streams:
+                lang_tag = s.get('tags', {}).get('language', '')
+                if lang_tag in (self.lang, self.lang3):
+                    return True
+            return True  # embedded subtitle present (wrong lang — still skip re-embed)
+        except Exception:
+            return False
+
+    def _should_skip(self, video_path: Path) -> bool:
+        if not self._sidecar_exists(video_path):
+            return False
+        if self.do_embed and not self._embedded_sub_exists(video_path):
+            return False
+        return True
+
+    # --- download pipeline ---
+
+    def _fetch_srt(self, candidates: List[dict]) -> Optional[bytes]:
+        for candidate in candidates[:5]:  # try top 5 results
+            for prov in self.providers:
+                srt = prov.download(candidate)
+                if srt and len(srt) > 100:
+                    return srt
+        return None
+
+    def process_movie(self, folder: Path, video_path: Path,
+                      imdb_id: Optional[str], tmdb_id: Optional[int]):
+        if self._should_skip(video_path):
+            logger.debug(f"  ⏭ Subtitle already present for {video_path.name}")
+            return
+
+        candidates: List[dict] = []
+        for prov in self.providers:
+            candidates = prov.search_movie(imdb_id, tmdb_id, self.lang)
+            if candidates:
+                break
+
+        if not candidates:
+            logger.debug(f"  No subtitles found for {video_path.name} [{self.lang}]")
+            return
+
+        srt_bytes = self._fetch_srt(candidates)
+        if not srt_bytes:
+            logger.warning(f"  ⚠ Subtitle download failed for {video_path.name}")
+            return
+
+        self._write_and_embed(video_path, srt_bytes)
+
+    def process_episode(self, video_path: Path, show_imdb_id: str,
+                        season: int, episode: int):
+        if self._should_skip(video_path):
+            logger.debug(f"  ⏭ Subtitle already present for {video_path.name}")
+            return
+
+        candidates: List[dict] = []
+        for prov in self.providers:
+            candidates = prov.search_episode(show_imdb_id, season, episode, self.lang)
+            if candidates:
+                break
+
+        if not candidates:
+            logger.debug(f"  No subtitles found for {video_path.name} S{season:02d}E{episode:02d}")
+            return
+
+        srt_bytes = self._fetch_srt(candidates)
+        if not srt_bytes:
+            logger.warning(f"  ⚠ Subtitle download failed for {video_path.name}")
+            return
+
+        self._write_and_embed(video_path, srt_bytes)
+
+    def _write_and_embed(self, video_path: Path, srt_bytes: bytes):
+        srt_path = self._sidecar_path(video_path)
+
+        if self.do_sidecar:
+            try:
+                srt_path.write_bytes(srt_bytes)
+                logger.info(f"  ✓ Subtitle sidecar: {srt_path.name}")
+            except IOError as e:
+                logger.error(f"  Failed to write sidecar: {e}")
+                return
+
+        if self.do_embed:
+            self._embed_subtitle(video_path, srt_path)
+
+    def _embed_subtitle(self, video_path: Path, srt_path: Path):
+        if not shutil.which('ffmpeg'):
+            logger.warning("  ffmpeg not found — cannot embed subtitle (sidecar only)")
+            return
+
+        if video_path.suffix.lower() not in ('.mp4', '.m4v'):
+            logger.info(f"  ⚠ Embed skipped — {video_path.suffix} not MP4/M4V (sidecar only)")
+            return
+
+        tmp = video_path.with_name(video_path.stem + '.tmp.mp4')
+        try:
+            result = subprocess.run(
+                [
+                    'ffmpeg', '-y',
+                    '-i', str(video_path),
+                    '-i', str(srt_path),
+                    '-c', 'copy',
+                    '-c:s', 'mov_text',
+                    '-metadata:s:s:0', f'language={self.lang3}',
+                    '-metadata:s:s:0', f'title={self.lang.upper()} Subtitles',
+                    '-disposition:s:0', 'default',
+                    str(tmp)
+                ],
+                capture_output=True,
+                timeout=600
+            )
+            if result.returncode != 0:
+                err = result.stderr.decode(errors='replace')[:300]
+                logger.error(f"  ffmpeg embed failed: {err}")
+                tmp.unlink(missing_ok=True)
+                return
+
+            # Sanity check: temp file must be ≥ 95% of original
+            orig_size = video_path.stat().st_size
+            if tmp.stat().st_size < orig_size * 0.95:
+                logger.error(f"  Embed sanity check failed — temp file too small, aborting")
+                tmp.unlink(missing_ok=True)
+                return
+
+            tmp.replace(video_path)
+            logger.info(f"  ✓ Embedded subtitle track ({self.lang3}) into {video_path.name}")
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"  ffmpeg timed out for {video_path.name}")
+            tmp.unlink(missing_ok=True)
+        except Exception as e:
+            logger.error(f"  Embed failed: {e}")
+            tmp.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
 # NFO Generator
 # ---------------------------------------------------------------------------
 
@@ -657,6 +1053,17 @@ class PlexMetadataOrchestrator:
         if self.tvdb:
             self.tvdb.authenticate()
 
+        # Subtitle downloader — only active when subtitles.enabled is true in config
+        sub_cfg = config.get('subtitles', {})
+        if sub_cfg.get('enabled', False):
+            lang = sub_cfg.get('language', 'auto')
+            if lang == 'auto':
+                lang = detect_system_language()
+            logger.info(f"Subtitle language: {lang} ({'OS locale' if sub_cfg.get('language', 'auto') == 'auto' else 'config'})")
+            self.subtitle_dl: Optional[SubtitleDownloader] = SubtitleDownloader(sub_cfg, lang)
+        else:
+            self.subtitle_dl = None
+
     # ------------------------------------------------------------------
     # Selective processing helpers
     # ------------------------------------------------------------------
@@ -681,6 +1088,27 @@ class PlexMetadataOrchestrator:
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _extract_imdb_id_from_nfo(nfo_path: Path) -> Optional[str]:
+        """Parse existing NFO for <uniqueid type="imdb"> — used for subtitle lookup."""
+        try:
+            tree = ET.parse(nfo_path)
+            for uid in tree.findall('uniqueid'):
+                if uid.get('type') == 'imdb' and uid.text:
+                    return uid.text.strip()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _find_video_file(folder: Path) -> Optional[Path]:
+        """Return the primary video file in a folder (largest file wins when ambiguous)."""
+        exts = {'.mp4', '.m4v', '.mkv', '.avi', '.mov'}
+        files = [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in exts]
+        if not files:
+            return None
+        return max(files, key=lambda f: f.stat().st_size)
 
     # ------------------------------------------------------------------
     # Movie library processing
@@ -810,6 +1238,16 @@ class PlexMetadataOrchestrator:
                         else:
                             logger.debug(f"  ⚠ No FanArt.tv source for {fname}")
 
+        # --- Download subtitles ---
+        if self.subtitle_dl:
+            video_file = self._find_video_file(folder)
+            if video_file:
+                imdb_id = (meta.imdb_id if meta else None) or self._extract_imdb_id_from_nfo(nfo_path)
+                tmdb_id_sub = meta.tmdb_id if meta else tmdb_id
+                self.subtitle_dl.process_movie(folder, video_file, imdb_id, tmdb_id_sub)
+            else:
+                logger.debug(f"  No video file in {folder.name} — skipping subtitles")
+
     # ------------------------------------------------------------------
     # TV library processing
     # ------------------------------------------------------------------
@@ -870,8 +1308,15 @@ class PlexMetadataOrchestrator:
         else:
             logger.debug(f"⏭ {show_dir.name} — show level complete")
 
+        # Resolve show IMDb ID for subtitle lookups (from metadata or existing NFO)
+        show_imdb_id: Optional[str] = None
+        if meta and meta.imdb_id:
+            show_imdb_id = meta.imdb_id
+        elif nfo_path.exists():
+            show_imdb_id = self._extract_imdb_id_from_nfo(nfo_path)
+
         # Always scan seasons/episodes (they may have missing items even if show root is done)
-        self._process_seasons(show_dir, meta)
+        self._process_seasons(show_dir, meta, show_imdb_id)
 
     def _find_show_metadata(self, show_name: str) -> Optional[ShowMetadata]:
         # TVDb first
@@ -898,7 +1343,8 @@ class PlexMetadataOrchestrator:
             )
         return None
 
-    def _process_seasons(self, show_dir: Path, show_meta: Optional[ShowMetadata]):
+    def _process_seasons(self, show_dir: Path, show_meta: Optional[ShowMetadata],
+                         show_imdb_id: Optional[str] = None):
         for season_dir in sorted(show_dir.iterdir()):
             if not season_dir.is_dir():
                 continue
@@ -930,7 +1376,7 @@ class PlexMetadataOrchestrator:
                 self._download_season_poster(season_dir, show_meta.tvdb_id, season_num)
 
             # Process episodes
-            self._process_episodes(season_dir, show_meta, season_num)
+            self._process_episodes(season_dir, show_meta, season_num, show_imdb_id)
 
     def _download_season_poster(self, season_dir: Path, tvdb_id: int, season_num: int):
         try:
@@ -949,7 +1395,8 @@ class PlexMetadataOrchestrator:
         except requests.RequestException:
             pass
 
-    def _process_episodes(self, season_dir: Path, show_meta: Optional[ShowMetadata], season_num: int):
+    def _process_episodes(self, season_dir: Path, show_meta: Optional[ShowMetadata],
+                          season_num: int, show_imdb_id: Optional[str] = None):
         video_exts = {'.mkv', '.mp4', '.avi', '.m4v', '.mov'}
         video_files = sorted(f for f in season_dir.iterdir()
                              if f.is_file() and f.suffix.lower() in video_exts)
@@ -994,6 +1441,10 @@ class PlexMetadataOrchestrator:
 
             if needs_thumb and ep_meta and ep_meta.thumb_url:
                 self.dl.download_image(ep_meta.thumb_url, thumb_path)
+
+            # Download subtitles for this episode
+            if self.subtitle_dl and show_imdb_id and ep_num is not None:
+                self.subtitle_dl.process_episode(vf, show_imdb_id, season_num, ep_num)
 
     @staticmethod
     def _extract_season_number(folder_name: str) -> Optional[int]:

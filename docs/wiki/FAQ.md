@@ -304,3 +304,32 @@ A: They are complementary, not redundant:
 | When to use | iTunes/Subler-encoded files with embedded art | Any file — API-sourced art regardless of what's embedded |
 
 If you have iTunes-purchased files, run both. If your files have no embedded artwork, skip `extract_artwork.py` and use the Metadata Generator directly.
+
+---
+
+**Q: Do I need both the sidecar `.srt` and the embedded subtitle track?**
+
+A: Yes — they serve different players:
+
+| Format | Read by |
+|--------|--------|
+| `{stem}.{lang}.srt` | Plex (Local Media Assets picks it up automatically) |
+| Embedded `mov_text` track | Apple TV local media playback |
+
+Plex does not read embedded subtitle tracks from MP4 files. Apple TV's local player does not read sidecar `.srt` files. You need both for full coverage.
+
+---
+
+**Q: What is the OpenSubtitles download limit?**
+
+A: By default (API key only, no account credentials): **5 downloads/day**. With a free OpenSubtitles account and credentials in the config: **40 downloads/day** per API key. Subdl is used as a fallback if OpenSubtitles is exhausted or unavailable, with no account required.
+
+API key registration is free at [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) — no credit card.
+
+---
+
+**Q: Will subtitle embedding modify my video files?**
+
+A: Yes. When `embed_in_file: true`, ffmpeg writes the subtitle track into the MP4/M4V file. The process is atomic — ffmpeg writes to a temp file first, then replaces the original only after a size sanity check passes. The disk space required during the operation is equal to the file size (temp + original exist simultaneously until the replace).
+
+MKV files are never modified — sidecar-only is used automatically for `.mkv`.
