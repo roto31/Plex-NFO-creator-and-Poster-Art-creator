@@ -91,6 +91,23 @@ This script uses `ffmpeg` to extract that embedded artwork and save it as a `pos
 
 A preprocessing tool. Before running the scraper, this script cleans up folder and file names — stripping torrent-style tags, quality indicators, source identifiers, and leading numbering. It always runs as a dry run first, showing exactly what would change before anything is renamed.
 
+### Metadata Generator
+
+A complementary, scheduled automation layer that runs daily to pick up newly added content and keep metadata current. Unlike the core suite (which is run on-demand), the generator runs unattended.
+
+**Key behaviors:**
+- **Selective processing** — each item is checked before any API call; if both NFO and all artwork are already present, the item is skipped entirely with zero API calls
+- **Full FileBot artwork set** — downloads `poster.jpg`, `folder.jpg`, `backdrop.jpg`, `clearart.png`, `disc.png`, and `logo.png` per movie; plus `banner.jpg`, `fanart.jpg`, `clearart.png`, `logo.png`, and `landscape.jpg` per TV show — the same files FileBot fetches when "fetch data" is selected
+- **Original posters preferred** — TMDB official artwork is fetched first; FanArt.tv is used as a fallback for poster/backdrop and as the exclusive source for clearart, disc, and logo
+- **Plex auto-refresh** — triggers a Plex library refresh automatically after each run
+- **`--media-type tv | movies | all`** — process only what you need
+
+Two scripts are available:
+- `metadata-generator/plex_metadata_generator.py` — TV shows + Movies
+- `metadata-generator/plex_metadata_generator_extended.py` — TV shows + Movies + Music (Spotify + MusicBrainz)
+
+See the [Metadata Generator Reference](metadata-generator-Reference) for full documentation.
+
 ---
 
 ## Results
@@ -113,11 +130,17 @@ The 75 movies and 55 TV shows that could not be matched are genuinely not in TMD
 
 ## Navigation
 
+### Core Suite
 - **[Installation & Setup](Installation)**
 - **[preflight.py Reference](preflight.py-Reference)** — dependency checks, auto-install, progress window, logging
 - **[scraper.py Reference](scraper.py-Reference)**
 - **[extract_artwork.py Reference](extract_artwork.py-Reference)**
 - **[rename_movies.py Reference](rename_movies.py-Reference)**
+
+### Metadata Generator
+- **[Metadata Generator Reference](metadata-generator-Reference)** — selective processing, movie + TV + Music support, full artwork set, scheduling
+
+### Reference
 - **[Process Flow Diagrams](Diagrams)** — Mermaid flowcharts for every decision path
 - **[NFO Format Reference](NFO-Format-Reference)**
 - **[Plex Configuration](Plex-Configuration)**

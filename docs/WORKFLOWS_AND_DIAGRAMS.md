@@ -457,3 +457,44 @@ graph TB
 - Error handling and fallback chains
 - Library organization
 - Integration scenarios
+
+---
+
+## Diagram: Metadata Generator Movie Processing
+
+```mermaid
+flowchart TD
+  A([Scan movies_library_root]) --> B[For each folder]
+  B --> C{is_multipart?}
+  C -- Yes --> D[⏭ Skip — multi-part]
+  C -- No --> E[Check all 6 artwork files\nMovie.nfo]
+  E --> F{Anything missing?}
+  F -- No --> G[⏭ Skip — already complete]
+  F -- Yes --> H{Movie.nfo exists?}
+  H -- Yes --> I[Parse TMDB ID from NFO\nno search API call]
+  H -- No --> J[Search TMDb\ntitle + year from folder name]
+  I & J --> K[get_movie details]
+  K --> L[Write Movie.nfo\nif needed]
+  L --> M[Download from TMDB\nposter.jpg + backdrop.jpg\ncopy → folder.jpg]
+  M --> N[Download from FanArt.tv\nclearart.png + disc.png + logo.png]
+  N --> O[refresh_plex movies_library_key]
+```
+
+---
+
+## Diagram: Metadata Generator --media-type Decision Flow
+
+```mermaid
+flowchart TD
+  A([Script launched]) --> B{--media-type?}
+  B -- tv --> C[process_tv_library\nTVDB + TMDB + FanArt.tv]
+  B -- movies --> D[process_movie_library\nTMDB + FanArt.tv]
+  B -- music --> E[process_music_library\nSpotify + MusicBrainz\nextended only]
+  B -- all --> F[Run all libraries\npresent in config]
+  F --> C & D & G{Extended?}
+  G -- Yes --> E
+  G -- No --> H[Skip music]
+  C --> I[refresh_plex tv_library_key]
+  D --> J[refresh_plex movies_library_key]
+  E --> K[refresh_plex music_library_key]
+```

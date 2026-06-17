@@ -249,4 +249,58 @@ This can happen with older TV files or files processed by tools other than iTune
 
 A: Yes. Simply download the poster from TMDB or TVDB and save it as `poster.jpg` in the movie or show folder, overwriting the extracted image. Plex will use whichever `poster.jpg` is present.
 
-The scripts do not download posters from the API — they only extract embedded artwork. Adding API-based poster downloads is a possible future enhancement.
+The core scripts (`extract_artwork.py`) only extract embedded MP4 artwork. The **Metadata Generator** downloads official posters from TMDB/TVDB automatically — see the [Metadata Generator Reference](metadata-generator-Reference).
+
+---
+
+## Metadata Generator
+
+**Q: Does the Metadata Generator replace `scraper.py`?**
+
+A: No. They serve different purposes:
+- `scraper.py` is for **initial, on-demand batch processing** — run it once to generate NFOs for your entire library
+- The Metadata Generator is for **ongoing automated updates** — it runs daily and only processes items that are new or missing files
+
+Use `scraper.py` first to bootstrap your library, then add the Metadata Generator to keep it current.
+
+---
+
+**Q: Can I run movies only with the Metadata Generator?**
+
+A: Yes: `python3 plex_metadata_generator.py --media-type movies`
+
+---
+
+**Q: Will the Metadata Generator overwrite files it already generated?**
+
+A: No. Selective processing checks every NFO file and every artwork file individually before any API call. If an item already has both its NFO and all expected artwork files, it is logged as `⏭ already complete` and skipped entirely.
+
+Use `--force` to override this behavior and regenerate everything.
+
+---
+
+**Q: What is the difference between `plex_metadata_generator.py` and `plex_metadata_generator_extended.py`?**
+
+A: Both handle TV shows and Movies. The extended script additionally supports Music libraries (Spotify + MusicBrainz for artist, album, and track metadata). If you don't have a music library in Plex, use the standard script.
+
+---
+
+**Q: Do I need a FanArt.tv API key?**
+
+A: It is optional but highly recommended. Without it, `clearart.png`, `disc.png`, and `logo.png` are skipped (a warning is logged). `poster.jpg`, `folder.jpg`, and `backdrop.jpg` still download from TMDB. FanArt.tv personal API keys are free at [fanart.tv/get-an-api-key](https://fanart.tv/get-an-api-key/).
+
+---
+
+**Q: How does the Metadata Generator's artwork download differ from `extract_artwork.py`?**
+
+A: They are complementary, not redundant:
+
+| | `extract_artwork.py` | Metadata Generator |
+|--|---------------------|--------------------|
+| Source | Embedded MP4 artwork stream | TMDB + FanArt.tv + TVDB APIs |
+| Files written | `poster.jpg` (movie, show, season), `-thumb.jpg` (episode) | Full set: `poster.jpg`, `folder.jpg`, `backdrop.jpg`, `clearart.png`, `disc.png`, `logo.png` |
+| Requires internet | No | Yes |
+| Requires ffmpeg | Yes | No |
+| When to use | iTunes/Subler-encoded files with embedded art | Any file — API-sourced art regardless of what's embedded |
+
+If you have iTunes-purchased files, run both. If your files have no embedded artwork, skip `extract_artwork.py` and use the Metadata Generator directly.

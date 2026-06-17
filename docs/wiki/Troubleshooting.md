@@ -301,3 +301,79 @@ for d in "/Volumes/iTunes 5/Movies"/*/; do
   [ ! -f "${d}Movie.nfo" ] && echo "$d"
 done
 ```
+
+---
+
+## Metadata Generator Issues
+
+### NFO files not being generated for movies
+
+1. Ensure `movies_library_root` is set in the config and the path exists
+2. Check that `tmdb.api_key` is a real key (not `YOUR_TMDB_API_KEY_HERE`)
+3. Run with `--debug` to see what TMDB search queries are being made
+4. Verify the movie folder name includes the year: `Movie Title (1985)/` — without the year, the scraper retries but may match the wrong version
+
+```bash
+python3 metadata-generator/plex_metadata_generator.py \
+  --config /etc/plex-metadata-generator.conf \
+  --media-type movies --movie "Back to the Future (1985)" --debug
+```
+
+### `clearart.png`, `disc.png`, `logo.png` are not being downloaded
+
+These come exclusively from FanArt.tv and require `fanart_tv.api_key` in the config. Check:
+
+```bash
+grep fanart_tv /etc/plex-metadata-generator.conf
+```
+
+If the key reads `YOUR_FANART_TV_API_KEY_HERE` or is absent, get a free personal key at [fanart.tv/get-an-api-key](https://fanart.tv/get-an-api-key/) and add it to the config. The script logs a warning (not an error) when this key is missing.
+
+### Artwork files exist but Plex is not showing them
+
+1. Verify Plex's agent priority: **Settings → Libraries → [Library] → Edit → Agents** — **Local Media Assets** must be the top-ranked agent
+2. After placing new artwork files, trigger a refresh: **⋯ → Manage Library → Refresh All Metadata**
+3. Verify file sizes are > 0 bytes: `ls -la "/path/to/movie/poster.jpg"`
+4. Check filename case — Plex on Linux is case-sensitive; the filenames must be lowercase (`poster.jpg`, not `Poster.jpg`)
+
+### Plex library refresh not triggering after generation
+
+Check config:
+```json
+"plex": {
+  "url": "http://localhost:32400",
+  "token": "YOUR_PLEX_TOKEN",
+  "tv_library_key": "1",
+  "movies_library_key": "2"
+}
+```
+
+- `token` — visible by viewing page source at `http://localhost:32400/web/` and searching for `authenticationToken`
+- `tv_library_key` / `movies_library_key` — visible in the URL when viewing that library in Plex Web (`/library/sections/2/`)
+
+Test manually:
+```bash
+curl -X POST -H "X-Plex-Token: YOUR_TOKEN" \
+  http://localhost:32400/library/sections/2/refresh
+```
+
+### Script runs but marks everything as "already complete" on first run
+
+This means all items already have both NFO and artwork. Run with `--force` to regenerate:
+
+```bash
+python3 metadata-generator/plex_metadata_generator.py \
+  --config /etc/plex-metadata-generator.conf \
+  --media-type all --force
+```
+
+### health-check.py reports config issues
+
+Common config fixes:
+
+| Message | Fix |
+|---------|-----|
+| `Missing config keys: ['tv_library_root']` | Add `"tv_library_root": "/path/to/TV"` to config (or use the old `"library_root"` key) |
+| `Config contains placeholder API keys` | Replace all `YOUR_*_HERE` values with real keys |
+| `fanart_tv.api_key not set` | Warning only — add key to get clearart/disc/logo artwork |
+| `Tunarr DB not found` | Normal if not using Tunarr — it is an optional fallback source |

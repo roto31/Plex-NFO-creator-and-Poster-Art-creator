@@ -226,3 +226,82 @@ If you see `PermissionError: [Errno 13] Permission denied`, this is the cause.
 - `notify-send` is needed for completion notifications: `sudo apt-get install libnotify-bin`
 - `zenity` or `kdialog` is needed for install dialogs. On headless systems, the dialog is skipped and the auto-install proceeds automatically
 - If running as a non-root user, the `sudo`-based package manager commands will prompt for your password in the terminal during install
+
+---
+
+## Metadata Generator Setup
+
+### 1. Get API Keys
+
+In addition to the core TMDB + TVDB keys, the Metadata Generator uses:
+
+| Key | Required for | Where to get |
+|-----|-------------|-------------|
+| TMDB | Movies, TV posters/backdrops | [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api) |
+| TVDB | TV show + episode metadata | [thetvdb.com/api-information](https://thetvdb.com/api-information) |
+| FanArt.tv | clearart, disc, logo artwork | [fanart.tv/get-an-api-key](https://fanart.tv/get-an-api-key/) — free personal key |
+| Plex token | Library auto-refresh | View page source at `http://localhost:32400/web/`, search `authenticationToken` |
+| Spotify (extended only) | Music metadata | [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) |
+
+### 2. Configure
+
+```bash
+cp metadata-generator/plex-metadata-generator.conf /etc/plex-metadata-generator.conf
+# or macOS:
+cp metadata-generator/plex-metadata-generator.conf ~/Library/Preferences/plex-metadata-generator.conf
+```
+
+Edit the config and fill in your keys and library paths:
+
+```json
+{
+  "tv_library_root": "/path/to/TV Shows",
+  "movies_library_root": "/path/to/Movies",
+  "plex": {
+    "url": "http://localhost:32400",
+    "token": "YOUR_PLEX_TOKEN",
+    "tv_library_key": "1",
+    "movies_library_key": "2"
+  },
+  "tvdb":      { "api_key": "YOUR_TVDB_KEY" },
+  "tmdb":      { "api_key": "YOUR_TMDB_KEY" },
+  "fanart_tv": { "api_key": "YOUR_FANART_TV_KEY" }
+}
+```
+
+Find your Plex library key: in Plex Web, open the library and note the number in the URL (`/library/sections/2/`).
+
+### 3. Test Run
+
+```bash
+python3 metadata-generator/plex_metadata_generator.py \
+  --config /etc/plex-metadata-generator.conf \
+  --media-type all --debug
+```
+
+### 4. Enable Scheduling
+
+**macOS (LaunchAgent — runs daily at 2 AM):**
+```bash
+bash metadata-generator/scheduling/install-macos.sh
+```
+
+**Linux (systemd timer):**
+```bash
+bash metadata-generator/scheduling/install-linux.sh
+sudo systemctl enable plex-metadata-generator.timer
+sudo systemctl start plex-metadata-generator.timer
+```
+
+**Windows (Task Scheduler):**
+```powershell
+.\metadata-generator\scheduling\install-windows.ps1
+```
+
+### 5. Health Check
+
+```bash
+python3 metadata-generator/health-check.py
+```
+
+This verifies your configuration, tests API connectivity (including FanArt.tv), checks scheduling status, and reports recent log activity.
