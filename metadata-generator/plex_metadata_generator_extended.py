@@ -6,15 +6,18 @@ Integrates with: Tunarr, TVDb, TMDb, MusicBrainz, iTunes Search API, Apple Music
 """
 
 import os
+import re
 import sys
 import json
 import logging
 import requests
 import sqlite3
+import unicodedata
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Set, Tuple
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
@@ -1342,19 +1345,31 @@ class PlexMetadataOrchestrator:
     
     def process_music_library(self, specific_artist: str = None):
         """Process music library (artists and albums)"""
-        logger.info("Processing music library")
+        workers = getattr(self, 'workers', 1)
+        logger.info(f"Processing music library ({workers} worker(s))")
 
         if not self.music_library_root.exists():
             logger.error(f"Music library root does not exist: {self.music_library_root}")
             return
 
         # Structure: Artist / Album / Tracks
-        for artist_dir in sorted(self.music_library_root.iterdir()):
-            if not artist_dir.is_dir() or artist_dir.name.startswith('.'):
-                continue
-            if specific_artist and artist_dir.name != specific_artist:
-                continue
-            self._process_music_artist(artist_dir)
+        artist_dirs = [
+            d for d in sorted(self.music_library_root.iterdir())
+            if d.is_dir() and not d.name.startswith('.')
+            and (not specific_artist or d.name == specific_artist)
+        ]
+
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(self._process_music_artist, d): d for d in artist_dirs}
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Error processing {futures[future].name}: {e}")
+        else:
+            for artist_dir in artist_dirs:
+                self._process_music_artist(artist_dir)
     
     def _process_tv_show(self, show_name: str, show_path: Path):
         """Process a single TV show (existing implementation)"""
@@ -1612,9 +1627,10 @@ class PlexMetadataOrchestrator:
 
             if media_type in ('movies', 'all'):
                 logger.info("Starting movie metadata generation")
-                # Delegate to base script's process_movie_library
+                # Delegate to base script's process_movie_library (full NFO + artwork)
                 from plex_metadata_generator import PlexMetadataOrchestrator as BaseOrchestrator
-                base = BaseOrchestrator(self.config, force=self.force)
+                base = BaseOrchestrator(self.config, force=self.force,
+                                        workers=getattr(self, 'workers', 1))
                 base.process_movie_library(specific_movie=specific_item)
 
             if media_type in ('music', 'all'):
@@ -1886,6 +1902,10 @@ if __name__ == '__main__':
         help='Overwrite existing NFO files and artwork'
     )
     parser.add_argument(
+        '--workers', type=int, default=1, metavar='N',
+        help='Parallel workers for movie/TV processing (default: 1; use 4 for bulk runs)'
+    )
+    parser.add_argument(
         '--debug',
         action='store_true',
         help='Enable debug logging'
@@ -1903,4 +1923,5 @@ if __name__ == '__main__':
 
     orchestrator = PlexMetadataOrchestrator(config)
     orchestrator.force = getattr(args, 'force', False)
+    orchestrator.workers = max(1, getattr(args, 'workers', 1))
     orchestrator.run(args.media_type, args.item)
