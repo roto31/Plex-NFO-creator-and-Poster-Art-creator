@@ -122,14 +122,36 @@ class TrackMetadata:
 
 class MusicBrainzProvider:
     """Fetch metadata from MusicBrainz API"""
-    
+
     BASE_URL = 'https://musicbrainz.org/ws/2'
-    
+    # MusicBrainz policy: max 1 req/sec; back off on 503
+    _MIN_INTERVAL = 1.1
+
     def __init__(self, user_agent: str = 'PlexMetadataGenerator/1.0'):
         self.user_agent = user_agent
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': user_agent})
-    
+        self._last_request_time: float = 0.0
+
+    def _get(self, url: str, params: dict, retries: int = 4) -> requests.Response:
+        """Rate-limited GET with exponential backoff on 503."""
+        import time
+        for attempt in range(retries):
+            elapsed = time.time() - self._last_request_time
+            if elapsed < self._MIN_INTERVAL:
+                time.sleep(self._MIN_INTERVAL - elapsed)
+            self._last_request_time = time.time()
+            resp = self.session.get(url, params=params, timeout=15)
+            if resp.status_code == 503:
+                wait = 2 ** attempt
+                logger.warning(f"MusicBrainz 503 — retrying in {wait}s (attempt {attempt+1}/{retries})")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp
+        resp.raise_for_status()
+        return resp
+
     def search_release(self, album_title: str, artist: str) -> List[Dict]:
         """Search for an album release"""
         try:
@@ -139,21 +161,16 @@ class MusicBrainzProvider:
                 'fmt': 'json',
                 'limit': 10
             }
-            
-            response = self.session.get(
-                f'{self.BASE_URL}/release',
-                params=params,
-                timeout=10
-            )
-            response.raise_for_status()
-            
+
+            response = self._get(f'{self.BASE_URL}/release', params)
+
             results = response.json().get('releases', [])
             logger.debug(f"MusicBrainz search for '{album_title}' by '{artist}' returned {len(results)} results")
             return results
         except requests.RequestException as e:
             logger.error(f"MusicBrainz search failed: {e}")
             return []
-    
+
     def get_release(self, mbid: str) -> Optional[AlbumMetadata]:
         """Fetch complete album metadata by MusicBrainz ID"""
         try:
@@ -161,13 +178,8 @@ class MusicBrainzProvider:
                 'fmt': 'json',
                 'inc': 'artists+labels+recordings'
             }
-            
-            response = self.session.get(
-                f'{self.BASE_URL}/release/{mbid}',
-                params=params,
-                timeout=10
-            )
-            response.raise_for_status()
+
+            response = self._get(f'{self.BASE_URL}/release/{mbid}', params)
             data = response.json()
             
             # Extract metadata
@@ -216,14 +228,9 @@ class MusicBrainzProvider:
                 'fmt': 'json',
                 'limit': 5
             }
-            
-            response = self.session.get(
-                f'{self.BASE_URL}/artist',
-                params=params,
-                timeout=10
-            )
-            response.raise_for_status()
-            
+
+            response = self._get(f'{self.BASE_URL}/artist', params)
+
             results = response.json().get('artists', [])
             logger.debug(f"MusicBrainz artist search for '{artist_name}' returned {len(results)} results")
             return results
@@ -1072,7 +1079,7 @@ class PlexMetadataOrchestrator:
 
         spotify_config = config.get('spotify', {})
         self.spotify = None
-        if spotify_config.get('client_id') and spotify_config.get('client_secret'):
+        if spotify_config.get('enabled', True) and spotify_config.get('client_id') and spotify_config.get('client_secret'):
             self.spotify = SpotifyProvider(
                 spotify_config['client_id'],
                 spotify_config['client_secret']
