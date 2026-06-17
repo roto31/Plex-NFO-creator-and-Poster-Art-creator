@@ -11,10 +11,11 @@
 ### ✨ New in v1.1
 
 #### Music Metadata Support
-- **Spotify API integration** - Album covers, artist info, comprehensive metadata
-- **MusicBrainz integration** - ISRC codes, multiple releases, comprehensive data
+- **iTunes Search API** - Free, zero-auth album art at 3000×3000, artist/album metadata, always active
+- **Apple MusicKit (optional)** - Higher-resolution artist images and richer metadata for users with Apple Developer accounts
+- **MusicBrainz integration** - MBID, ISRC codes, multiple releases, comprehensive data; rate-limited to 1 req/sec with exponential backoff
 - **Track-level metadata** - Title, track number, duration, genre
-- **Artist profiles** - Bios, images, genres, member lists
+- **Artist profiles** - Images, genres; `<appleid>` tag replaces former `<spotifyid>`
 
 #### NFO Creator Integration
 - **Official integration** with https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator
@@ -77,17 +78,25 @@
 
 ## 🎵 Music API Support
 
-### Spotify
-- **Authentication:** Client Credentials Flow (free tier sufficient)
-- **Coverage:** 70+ million tracks
-- **Features:** Album art, artist images, track metadata
-- **Setup time:** 5 minutes
+### iTunes Search API
+- **Authentication:** None — always active, zero setup
+- **Coverage:** Apple Music catalog (hundreds of millions of tracks)
+- **Features:** Album art at 3000×3000, artist search, album metadata, genres, release dates
+- **Setup time:** Zero
 - **Cost:** Free
 
+### Apple MusicKit (optional)
+- **Authentication:** ES256 JWT (Apple Developer `.p8` key, 6-month token)
+- **Features:** Higher-res artist images, richer metadata
+- **Setup time:** ~15 minutes (requires Apple Developer account)
+- **Cost:** $99/yr (Apple Developer Program)
+- **Required package:** `pip3 install cryptography`
+
 ### MusicBrainz
-- **Authentication:** Email-based (no API key)
+- **Authentication:** Email in User-Agent header (no API key)
 - **Coverage:** 30+ million recordings
-- **Features:** ISRC codes, multiple releases, comprehensive metadata
+- **Features:** MBID, ISRC codes, multiple releases, comprehensive metadata
+- **Rate limit:** 1 req/sec (built-in delay + exponential backoff on 503)
 - **Setup time:** Instant
 - **Cost:** Free
 
@@ -174,21 +183,23 @@ https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator
 ```json
 {
   "music_library_root": "/mnt/media/Music",
-  
-  "spotify": {
-    "client_id": "YOUR_CLIENT_ID",
-    "client_secret": "YOUR_CLIENT_SECRET",
-    "enabled": true
+
+  "apple_musickit": {
+    "enabled": false,
+    "team_id": "",
+    "key_id": "",
+    "private_key_path": "",
+    "storefront": "us",
+    "skip": false
   },
   
   "musicbrainz": {
-    "contact": "your_email@example.com",
-    "enabled": true
+    "contact": "your_email@example.com"
   },
   
   "metadata_priority": {
     "tv": ["tvdb", "tmdb", "tunarr"],
-    "music": ["spotify", "musicbrainz"]
+    "music": ["apple_musickit", "itunes", "musicbrainz"]
   }
 }
 ```
@@ -266,8 +277,9 @@ TV/
 - Same authentication mechanisms
 - Same file permissions requirements
 - Same Plex API token usage
-- New: Spotify API (Client Credentials - standard practice)
-- New: MusicBrainz (Email-based, no credentials)
+- New: iTunes Search API (no credentials — public Apple CDN)
+- New: Apple MusicKit optional (`.p8` key stored locally, never transmitted in plaintext)
+- New: MusicBrainz (email in User-Agent header only)
 
 ### API Key Safety
 - Never stored in repo (config file only)
@@ -285,8 +297,9 @@ TV/
 - Plex Media Server (any recent version)
 
 ### New for Music
-- Spotify app (free registration)
-- MusicBrainz account (free, email only)
+- iTunes Search API: no registration needed (built-in)
+- Apple MusicKit: optional Apple Developer account ($99/yr); `pip3 install cryptography`
+- MusicBrainz: free, email address in config for User-Agent
 
 ### Optional
 - Docker (for containerization)
@@ -326,7 +339,8 @@ TV/
 | Systemd | ✅ | ✅ | None |
 | Cron | ✅ | ✅ | None |
 | Docker | ✅ | ✅ | None |
-| Spotify API | ❌ | ✅ | N/A |
+| iTunes Search API | ❌ | ✅ | N/A |
+| Apple MusicKit | ❌ | ✅ optional | N/A |
 | MusicBrainz | ❌ | ✅ | N/A |
 | Old configs | ✅ | ✅ | None |
 

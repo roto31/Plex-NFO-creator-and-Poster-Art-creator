@@ -470,7 +470,8 @@ flowchart TD
     TMDB[TMDB v3]
     FANART[FanArt.tv v3]
     Tunarr[Tunarr SQLite]
-    Spotify[Spotify API]
+    iTunes[iTunes Search API]
+    MusicKit[Apple MusicKit\noptional]
     MB[MusicBrainz API]
   end
   subgraph Generator
@@ -487,7 +488,7 @@ flowchart TD
   FANART -- clearart/logo/landscape --> TV
   TMDB --> MOV
   FANART -- clearart/disc/logo\nposter fallback --> MOV
-  Spotify & MB --> MUS
+  iTunes & MusicKit & MB --> MUS
   TV & MOV & MUS --> CHECK
   CHECK -- All present --> SKIP
   CHECK -- Missing NFO or art --> RUN
@@ -580,10 +581,13 @@ flowchart TD
   A([Scan music_library_root]) --> B[For each Artist dir]
   B --> C{artist.nfo missing\nor artist.jpg missing?}
   C -- Neither --> D[Skip artist-level — check albums]
-  C -- Missing --> E[SpotifyProvider.search_artist]
+  C -- Missing --> E[MusicBrainzProvider.search_artist\nlocal DB or REST]
   E --> F{Found?}
-  F -- No --> G[MusicBrainzProvider fallback]
-  G --> H{Found?}
+  F -- No --> G[Apple MusicKit\nif configured]
+  G --> GA{Found?}
+  GA -- No --> GB[iTunes search_artist]
+  GA -- Yes --> J
+  GB --> H{Found?}
   H -- No --> I[⚠ No artist metadata]
   F -- Yes --> J[generate_artist_nfo\nDownload artist.jpg]
   H -- Yes --> J
@@ -591,9 +595,9 @@ flowchart TD
   D --> K[For each Album dir]
   K --> L{album.nfo missing\nor cover.jpg missing?}
   L -- Neither --> M[Skip album-level — check tracks]
-  L -- Missing --> N[SpotifyProvider.search_album]
+  L -- Missing --> N[Apple MusicKit\nif configured]
   N --> O{Found?}
-  O -- No --> P[MusicBrainz fallback]
+  O -- No --> P[iTunes search_album\n3000×3000 cover art]
   O -- Yes --> Q[generate_album_nfo\nDownload cover.jpg]
   P --> Q
   Q --> M
@@ -614,7 +618,7 @@ flowchart TD
   B --> C{Value?}
   C -- tv --> D[process_tv_library\nTVDB + TMDB + FanArt.tv + Tunarr]
   C -- movies --> E[process_movie_library\nTMDB + FanArt.tv]
-  C -- music --> F[process_music_library\nSpotify + MusicBrainz\nextended script only]
+  C -- music --> F[process_music_library\niTunes + Apple MusicKit + MusicBrainz\nextended script only]
   C -- all --> G[Run all applicable\nbased on config keys present]
   G --> D & E & H{Extended\nscript?}
   H -- Yes --> F

@@ -22,7 +22,7 @@ A suite of Python scripts that generate Plex-compatible `.nfo` metadata files an
 | Script | Purpose |
 |--------|---------|
 | [`metadata-generator/plex_metadata_generator.py`](metadata-generator/plex_metadata_generator.py) | Automated daily TV show NFO generator with Tunarr/TVDB/TMDB integration and Plex auto-refresh |
-| [`metadata-generator/plex_metadata_generator_extended.py`](metadata-generator/plex_metadata_generator_extended.py) | Extended version with Music library support (Spotify + MusicBrainz) |
+| [`metadata-generator/plex_metadata_generator_extended.py`](metadata-generator/plex_metadata_generator_extended.py) | Extended version with Music library support (iTunes Search API + Apple MusicKit + MusicBrainz) |
 | [`metadata-generator/health-check.py`](metadata-generator/health-check.py) | System diagnostics — verifies config, API connectivity, scheduling, and disk space |
 
 The Metadata Generator is a complementary automation layer: the core suite handles batch initial processing, while the Metadata Generator runs daily to pick up new content and trigger Plex refreshes automatically. See [`METADATA_GENERATOR_INTEGRATION.md`](METADATA_GENERATOR_INTEGRATION.md) for how to use them together.
