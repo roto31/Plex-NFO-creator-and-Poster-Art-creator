@@ -1224,6 +1224,18 @@ class TunarrMetadataProvider:
             return None
 
 
+def _tvdb_rating(score) -> float:
+    """Convert TVDB score to a 0-10 rating.
+    TVDB v4 /extended returns a raw popularity count in `score`, not a 0-10 average.
+    Return 0 for any value > 10 (raw count) and clamp valid ratings to [0, 10].
+    """
+    try:
+        v = float(score or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(v, 1) if 0 < v <= 10 else 0.0
+
+
 class TVDbProvider:
     """Fetch metadata from TheTVDB API (v4)."""
 
@@ -1278,7 +1290,7 @@ class TVDbProvider:
                 title=data.get('name', ''),
                 year=int(data.get('firstAired', '').split('-')[0]) if data.get('firstAired') else 0,
                 plot=data.get('overview', ''),
-                rating=float(data.get('score', 0) or 0),
+                rating=_tvdb_rating(data.get('score', 0)),
                 tvdb_id=tvdb_id,
                 imdb_id=data.get('imdbId'),
                 runtime=data.get('runtime', 45),

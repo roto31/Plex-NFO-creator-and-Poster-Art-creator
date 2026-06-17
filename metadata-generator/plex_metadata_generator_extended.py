@@ -1058,7 +1058,16 @@ class AppleMusicKitProvider:
 
 class PlexNFOGenerator:
     """Generate Plex-compliant NFO files for all media types"""
-    
+
+    @staticmethod
+    def _pretty(root: ET.Element) -> str:
+        import xml.dom.minidom
+        raw = ET.tostring(root, encoding='unicode')
+        dom = xml.dom.minidom.parseString(raw)
+        return dom.toprettyxml(indent='  ', encoding=None).replace(
+            '<?xml version="1.0" ?>', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        )
+
     def generate_show_nfo(self, metadata: ShowMetadata) -> str:
         """Generate tvshow.nfo XML"""
         root = ET.Element('tvshow')
@@ -1087,8 +1096,7 @@ class PlexNFOGenerator:
         if metadata.poster_url:
             ET.SubElement(root, 'poster').text = metadata.poster_url
         
-        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + \
-               ET.tostring(root, encoding='unicode')
+        return self._pretty(root)
     
     def generate_episode_nfo(self, metadata: EpisodeMetadata) -> str:
         """Generate episode NFO XML"""
@@ -1109,8 +1117,7 @@ class PlexNFOGenerator:
         if metadata.writer:
             ET.SubElement(root, 'writer').text = metadata.writer
         
-        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + \
-               ET.tostring(root, encoding='unicode')
+        return self._pretty(root)
     
     def generate_album_nfo(self, metadata: AlbumMetadata) -> str:
         """Generate album.nfo XML for music"""
@@ -1149,8 +1156,7 @@ class PlexNFOGenerator:
         if metadata.cover_url:
             ET.SubElement(root, 'cover').text = metadata.cover_url
         
-        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + \
-               ET.tostring(root, encoding='unicode')
+        return self._pretty(root)
     
     def generate_artist_nfo(self, metadata: ArtistMetadata) -> str:
         """Generate artist.nfo XML for music"""
@@ -1174,8 +1180,7 @@ class PlexNFOGenerator:
         if metadata.image_url:
             ET.SubElement(root, 'image').text = metadata.image_url
         
-        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + \
-               ET.tostring(root, encoding='unicode')
+        return self._pretty(root)
     
     def generate_track_nfo(self, metadata: TrackMetadata) -> str:
         """Generate track.nfo XML for individual songs"""
@@ -1200,8 +1205,7 @@ class PlexNFOGenerator:
         if metadata.isrc:
             ET.SubElement(root, 'isrc').text = metadata.isrc
         
-        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + \
-               ET.tostring(root, encoding='unicode')
+        return self._pretty(root)
 
 
 class MediaTypeDetector:
@@ -1336,18 +1340,21 @@ class PlexMetadataOrchestrator:
             if show_dir.is_dir():
                 self._process_tv_show(show_dir.name, show_dir)
     
-    def process_music_library(self):
+    def process_music_library(self, specific_artist: str = None):
         """Process music library (artists and albums)"""
         logger.info("Processing music library")
-        
+
         if not self.music_library_root.exists():
             logger.error(f"Music library root does not exist: {self.music_library_root}")
             return
-        
+
         # Structure: Artist / Album / Tracks
-        for artist_dir in self.music_library_root.iterdir():
-            if artist_dir.is_dir():
-                self._process_music_artist(artist_dir)
+        for artist_dir in sorted(self.music_library_root.iterdir()):
+            if not artist_dir.is_dir() or artist_dir.name.startswith('.'):
+                continue
+            if specific_artist and artist_dir.name != specific_artist:
+                continue
+            self._process_music_artist(artist_dir)
     
     def _process_tv_show(self, show_name: str, show_path: Path):
         """Process a single TV show (existing implementation)"""
@@ -1612,7 +1619,7 @@ class PlexMetadataOrchestrator:
 
             if media_type in ('music', 'all'):
                 logger.info("Starting music metadata generation")
-                self.process_music_library()
+                self.process_music_library(specific_artist=specific_item)
                 self.refresh_plex_library(self.music_library_key)
 
             logger.info("Metadata generation complete")
