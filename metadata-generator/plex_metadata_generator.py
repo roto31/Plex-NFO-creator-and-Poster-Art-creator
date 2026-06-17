@@ -1127,6 +1127,8 @@ class TVDbProvider:
             resp.raise_for_status()
             episodes = []
             for ep in resp.json().get('data', []):
+                if not isinstance(ep, dict):
+                    continue
                 num = ep.get('number')
                 if num is None:
                     continue
@@ -2022,10 +2024,19 @@ class PlexMetadataOrchestrator:
                 logger.debug(f"  Found TMDB ID {tmdb_id} in existing NFO")
 
         if tmdb_id is None:
-            # Need to search — extract year from folder name
+            # Check for embedded TMDB ID in folder name, e.g. "Inception (2010) {tmdb-27205}"
+            folder_tmdb_match = re.search(r'\{tmdb-(\d+)\}', folder.name, re.IGNORECASE)
+            if folder_tmdb_match:
+                tmdb_id = int(folder_tmdb_match.group(1))
+                logger.debug(f"  Using TMDB ID {tmdb_id} from folder name tag")
+
+        if tmdb_id is None:
+            # Need to search — extract year and clean title from folder name
             year_match = re.search(r'\((\d{4})\)', folder.name)
             year = int(year_match.group(1)) if year_match else None
-            title = re.sub(r'\s*\(\d{4}\)\s*$', '', folder.name).strip()
+            # Strip {…} tags and trailing year before searching
+            title = re.sub(r'\s*\{[^}]+\}\s*', ' ', folder.name)
+            title = re.sub(r'\s*\(\d{4}\)\s*$', '', title).strip()
             tmdb_id = self.tmdb_movie.search_movie(title, year) if self.tmdb_movie else None
             if not tmdb_id:
                 logger.warning(f"  ❌ Could not find TMDB match for: {folder.name}")
@@ -2187,16 +2198,34 @@ class PlexMetadataOrchestrator:
         self._process_seasons(show_dir, meta, show_imdb_id)
 
     def _find_show_metadata(self, show_name: str) -> Optional[ShowMetadata]:
-        # TVDb first
+        # Extract IDs embedded in folder name, e.g. "Friends {tmdb-1668}" or "Friends {tvdb-79168}"
+        tmdb_id_match = re.search(r'\{tmdb-(\d+)\}', show_name, re.IGNORECASE)
+        tvdb_id_match = re.search(r'\{tvdb-(\d+)\}', show_name, re.IGNORECASE)
+        # Strip all {…} tags to get a clean search title
+        clean_name = re.sub(r'\s*\{[^}]+\}\s*', ' ', show_name).strip()
+
+        # Direct TVDB lookup by ID when present
+        if tvdb_id_match and self.tvdb:
+            result = self.tvdb.get_show(int(tvdb_id_match.group(1)))
+            if result:
+                return result
+
+        # Direct TMDB lookup by ID when present
+        if tmdb_id_match and self.tmdb_tv:
+            result = self.tmdb_tv.get_show(int(tmdb_id_match.group(1)))
+            if result:
+                return result
+
+        # TVDb search with clean name
         if self.tvdb:
-            results = self.tvdb.search_show(show_name)
+            results = self.tvdb.search_show(clean_name)
             if results:
                 tvdb_id = results[0].get('tvdb_id')
                 if tvdb_id:
                     return self.tvdb.get_show(tvdb_id)
-        # TMDb fallback
+        # TMDb fallback with clean name
         if self.tmdb_tv:
-            results = self.tmdb_tv.search_show(show_name)
+            results = self.tmdb_tv.search_show(clean_name)
             if results:
                 return self.tmdb_tv.get_show(results[0]['id'])
         # Tunarr fallback
@@ -2256,6 +2285,8 @@ class PlexMetadataOrchestrator:
             )
             resp.raise_for_status()
             for artwork in resp.json().get('data', []):
+                if not isinstance(artwork, dict):
+                    continue
                 if artwork.get('season') == season_num:
                     url = f"https://artworks.thetvdb.com{artwork['image']}"
                     self.dl.download_image(url, season_dir / 'poster.jpg')
@@ -2379,7 +2410,8 @@ def load_config(config_file: str = '/etc/plex-metadata-generator.conf') -> Dict:
     try:
         with open(config_file) as f:
             # Strip // comments (not valid JSON but common in conf files)
-            text = re.sub(r'//[^\n]*', '', f.read())
+            # Use negative lookbehind to avoid stripping URLs (http://, https://)
+            text = re.sub(r'(?<!:)//[^\n]*', '', f.read())
             return json.loads(text)
     except FileNotFoundError:
         logger.error(f"Configuration file not found: {config_file}")
