@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=oneshot
 User=plex
 Group=plex
-ExecStart=/usr/local/bin/plex-metadata-generator --config /etc/plex-metadata-generator.conf
+ExecStart=/usr/local/bin/plex-metadata-generator --config /etc/plex-metadata-generator.conf --no-prompts
 
 # Security hardening
 NoNewPrivileges=true

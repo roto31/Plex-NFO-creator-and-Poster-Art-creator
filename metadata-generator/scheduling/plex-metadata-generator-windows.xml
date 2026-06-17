@@ -71,7 +71,7 @@
       <!-- Update this path to match where Python is installed -->
       <Command>C:\Python312\python.exe</Command>
       <!-- Update this path to where you placed the script -->
-      <Arguments>"C:\Program Files\PlexMetadataGenerator\plex_metadata_generator_extended.py" --config "C:\ProgramData\PlexMetadataGenerator\plex-metadata-generator.conf" --media-type all</Arguments>
+      <Arguments>"C:\Program Files\PlexMetadataGenerator\plex_metadata_generator_extended.py" --config "C:\ProgramData\PlexMetadataGenerator\plex-metadata-generator.conf" --media-type all --no-prompts</Arguments>
       <WorkingDirectory>C:\Program Files\PlexMetadataGenerator</WorkingDirectory>
     </Exec>
   </Actions>

@@ -67,6 +67,349 @@ def is_multipart(name: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Native OS dialogs — text input and yes/no
+# (same conventions as preflight.py in the core suite)
+# ---------------------------------------------------------------------------
+
+def _esc_apl(s: str) -> str:
+    """Escape for AppleScript double-quoted string."""
+    return s.replace('\\', '\\\\').replace('"', '\\"')
+
+
+def _esc_ps(s: str) -> str:
+    """Escape for PowerShell single-quoted string."""
+    return s.replace("'", "''")
+
+
+def _input_macos(title: str, message: str, default: str = '') -> Optional[str]:
+    """Native macOS text-input dialog via AppleScript. Returns text or None on Cancel."""
+    script = (
+        'tell application "System Events"\n'
+        '    activate\n'
+        f'    set r to display dialog "{_esc_apl(message)}" '
+        f'default answer "{_esc_apl(default)}" '
+        f'with title "{_esc_apl(title)}" buttons {{"Skip", "OK"}} '
+        'default button "OK"\n'
+        '    if button returned of r is "OK" then\n'
+        '        return text returned of r\n'
+        '    else\n'
+        '        return ""\n'
+        '    end if\n'
+        'end tell'
+    )
+    try:
+        result = subprocess.run(
+            ['osascript', '-e', script],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            return None
+        text = result.stdout.strip()
+        return text if text else None
+    except Exception:
+        return None
+
+
+def _input_linux(title: str, message: str, default: str = '') -> Optional[str]:
+    """Text-input dialog via zenity, kdialog, or terminal fallback."""
+    if shutil.which('zenity'):
+        try:
+            r = subprocess.run(
+                ['zenity', '--entry', f'--title={title}', f'--text={message}',
+                 f'--entry-text={default}', '--width=500'],
+                capture_output=True, text=True, timeout=300,
+            )
+            if r.returncode == 0:
+                return r.stdout.strip() or None
+        except Exception:
+            pass
+    if shutil.which('kdialog'):
+        try:
+            r = subprocess.run(
+                ['kdialog', '--inputbox', message, default, f'--title={title}'],
+                capture_output=True, text=True, timeout=300,
+            )
+            if r.returncode == 0:
+                return r.stdout.strip() or None
+        except Exception:
+            pass
+    return _input_terminal(title, message, default)
+
+
+def _input_windows(title: str, message: str, default: str = '') -> Optional[str]:
+    """Text-input dialog via PowerShell InputBox."""
+    ps = (
+        'Add-Type -AssemblyName Microsoft.VisualBasic; '
+        '$r = [Microsoft.VisualBasic.Interaction]::InputBox('
+        f"'{_esc_ps(message)}', '{_esc_ps(title)}', '{_esc_ps(default)}'); "
+        'Write-Output $r'
+    )
+    try:
+        r = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', ps],
+            capture_output=True, text=True, timeout=300,
+        )
+        if r.returncode == 0:
+            text = r.stdout.strip()
+            return text if text else None
+    except Exception:
+        pass
+    return _input_terminal(title, message, default)
+
+
+def _input_terminal(title: str, message: str, default: str = '') -> Optional[str]:
+    """Plain-terminal fallback for headless environments."""
+    sep = '─' * 64
+    prompt = f"  Enter value (or press Enter to skip): "
+    if default:
+        prompt = f"  Enter value [default: {default}]: "
+    print(f'\n{sep}\n  {title}\n{sep}\n{message}\n{sep}', flush=True)
+    try:
+        ans = input(prompt).strip()
+        return ans or default or None
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def _yesno_macos(title: str, message: str) -> bool:
+    script = (
+        'tell application "System Events"\n'
+        '    activate\n'
+        f'    set r to display dialog "{_esc_apl(message)}" '
+        f'buttons {{"No", "Yes"}} default button "Yes" '
+        f'with title "{_esc_apl(title)}" with icon note\n'
+        '    return button returned of r\n'
+        'end tell'
+    )
+    try:
+        result = subprocess.run(['osascript', '-e', script],
+                                capture_output=True, text=True, timeout=120)
+        return result.stdout.strip() == 'Yes'
+    except Exception:
+        return False
+
+
+def _yesno_linux(title: str, message: str) -> bool:
+    if shutil.which('zenity'):
+        try:
+            r = subprocess.run(
+                ['zenity', '--question', '--title', title,
+                 '--text', message, '--width', '480'],
+                timeout=120,
+            )
+            return r.returncode == 0
+        except Exception:
+            pass
+    if shutil.which('kdialog'):
+        try:
+            r = subprocess.run(['kdialog', '--yesno', message, f'--title={title}'],
+                               timeout=120)
+            return r.returncode == 0
+        except Exception:
+            pass
+    try:
+        ans = input(f"\n{title}\n{message}\n  Save? [y/N]: ").strip().lower()
+        return ans in ('y', 'yes')
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
+def _yesno_windows(title: str, message: str) -> bool:
+    ps = (
+        'Add-Type -AssemblyName System.Windows.Forms; '
+        '$r = [System.Windows.Forms.MessageBox]::Show('
+        f"'{_esc_ps(message)}', '{_esc_ps(title)}', "
+        '[System.Windows.Forms.MessageBoxButtons]::YesNo, '
+        '[System.Windows.Forms.MessageBoxIcon]::Question); '
+        "if ($r -eq 'Yes') { exit 0 } else { exit 1 }"
+    )
+    try:
+        r = subprocess.run(['powershell', '-NoProfile', '-Command', ps], timeout=120)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _prompt_text(title: str, message: str, default: str = '') -> Optional[str]:
+    """Show a native OS text-input dialog. Returns the entered value, or None on Skip."""
+    _sys = platform.system()
+    if _sys == 'Darwin':
+        return _input_macos(title, message, default)
+    elif _sys == 'Windows':
+        return _input_windows(title, message, default)
+    else:
+        return _input_linux(title, message, default)
+
+
+def _prompt_yesno(title: str, message: str) -> bool:
+    """Show a native OS yes/no dialog. Returns True for Yes."""
+    _sys = platform.system()
+    if _sys == 'Darwin':
+        return _yesno_macos(title, message)
+    elif _sys == 'Windows':
+        return _yesno_windows(title, message)
+    else:
+        return _yesno_linux(title, message)
+
+
+# ---------------------------------------------------------------------------
+# API key definitions — what to check and how to prompt
+# ---------------------------------------------------------------------------
+
+def _get_nested(d: dict, *keys) -> str:
+    """Walk nested dict; return empty string if any key is missing."""
+    for k in keys:
+        if not isinstance(d, dict):
+            return ''
+        d = d.get(k, {})
+    return d if isinstance(d, str) else ''
+
+
+def _set_nested(d: dict, keys: list, value: str):
+    """Set a nested dict value, creating intermediate dicts as needed."""
+    for k in keys[:-1]:
+        d = d.setdefault(k, {})
+    d[keys[-1]] = value
+
+
+def _is_placeholder(v: str) -> bool:
+    return not v or 'YOUR_' in v
+
+
+# Keys to check; 'required' means a missing value logs an error (not just a warning)
+_KEY_SPECS = [
+    {
+        'path': ['tmdb', 'api_key'],
+        'name': 'TMDB (The Movie Database)',
+        'used_for': 'movie and TV show metadata, poster and backdrop images',
+        'url': 'https://www.themoviedb.org/settings/api',
+        'required': True,
+    },
+    {
+        'path': ['tvdb', 'api_key'],
+        'name': 'TheTVDB',
+        'used_for': 'TV show and episode metadata, season/episode artwork',
+        'url': 'https://thetvdb.com/api-information',
+        'required': True,
+    },
+    {
+        'path': ['plex', 'token'],
+        'name': 'Plex',
+        'used_for': 'triggering a Plex library refresh after each run',
+        'url': 'https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/',
+        'required': False,
+    },
+    {
+        'path': ['fanart_tv', 'api_key'],
+        'name': 'FanArt.tv',
+        'used_for': 'clearart, disc art, and logo images for movies and TV shows',
+        'url': 'https://fanart.tv/get-an-api-key/',
+        'required': False,
+    },
+    {
+        'path': ['subtitles', 'opensubtitles', 'api_key'],
+        'name': 'OpenSubtitles',
+        'used_for': 'automatic subtitle download (primary source, 40 downloads/day free)',
+        'url': 'https://www.opensubtitles.com/consumers',
+        'required': False,
+        'condition': lambda cfg: cfg.get('subtitles', {}).get('enabled', False),
+    },
+    {
+        'path': ['subtitles', 'subdl', 'api_key'],
+        'name': 'Subdl',
+        'used_for': 'subtitle download fallback (optional — works without a key)',
+        'url': 'https://subdl.com/api',
+        'required': False,
+        'optional_skip': True,   # Subdl works without a key; only prompt if user wants one
+        'condition': lambda cfg: cfg.get('subtitles', {}).get('enabled', False),
+    },
+]
+
+
+def prompt_missing_api_keys(config: dict, config_path: str) -> dict:
+    """
+    Check each API key in the config. For any that are missing or contain
+    placeholder values, show a native OS text-input dialog asking the user
+    to enter the key. Offer to save the updated config back to disk.
+    Returns the (possibly updated) config dict.
+    """
+    prompted: list = []   # (path, new_value) pairs that were filled in
+
+    for spec in _KEY_SPECS:
+        # Skip if this key has a condition (e.g. subtitles must be enabled)
+        condition = spec.get('condition')
+        if condition and not condition(config):
+            continue
+
+        # Skip optional-skip keys unless the user explicitly enables subtitles
+        # but they are still surfaced after the main ones via the same loop
+        current = _get_nested(config, *spec['path'])
+        if not _is_placeholder(current):
+            continue  # key is already set — nothing to do
+
+        key_name = spec['path'][-1].replace('_', ' ')
+        service = spec['name']
+        used_for = spec['used_for']
+        url = spec['url']
+        required_label = '' if spec['required'] else ' (optional — press Skip to skip)'
+        optional_skip = spec.get('optional_skip', False)
+
+        title = f"Plex Metadata Generator — {service} Key Needed"
+        message = (
+            f"{service} API key is not configured.\n\n"
+            f"Used for: {used_for}\n\n"
+            f"Get a free key at:\n{url}\n\n"
+            f"Enter your {service} API key{required_label}:"
+        )
+
+        if optional_skip:
+            # For keys that truly work without a value, offer a clearer skip path
+            message = (
+                f"{service} API key is optional — Subdl works without one.\n\n"
+                f"Used for: {used_for}\n\n"
+                f"Get a key at:\n{url}\n\n"
+                f"Enter your {service} API key, or press Skip to continue without one:"
+            )
+
+        value = _prompt_text(title, message)
+
+        if value and not _is_placeholder(value):
+            _set_nested(config, spec['path'], value)
+            prompted.append((spec['path'], value))
+            logger.info(f"  ✓ {service} API key entered")
+        elif spec['required']:
+            logger.warning(
+                f"  ⚠ {service} API key was skipped — {spec['used_for']} will not work"
+            )
+        else:
+            logger.info(f"  ⏭ {service} API key skipped")
+
+    if not prompted:
+        return config
+
+    # Offer to save the updated config back to disk
+    keys_entered = ', '.join(spec[0][-1].replace('_', ' ') for spec in
+                             [(p,) for p in prompted])  # cosmetic list
+    keys_label = ', '.join(path[-1].replace('_', ' ') for path, _ in prompted)
+    save = _prompt_yesno(
+        'Plex Metadata Generator — Save API Keys',
+        f"You entered {len(prompted)} API key(s): {keys_label}\n\n"
+        f"Save to config file so you are not prompted again?\n\n"
+        f"{config_path}"
+    )
+
+    if save:
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2)
+            logger.info(f"  ✓ Config saved: {config_path}")
+        except IOError as e:
+            logger.error(f"  Failed to save config: {e}")
+
+    return config
+
+
+# ---------------------------------------------------------------------------
 # Language detection
 # ---------------------------------------------------------------------------
 
@@ -1539,6 +1882,8 @@ if __name__ == '__main__':
     parser.add_argument('--movie', help='Process only this movie folder name')
     parser.add_argument('--force', action='store_true',
                         help='Overwrite existing NFO files and artwork')
+    parser.add_argument('--no-prompts', action='store_true',
+                        help='Skip API key dialogs (for unattended/scheduled runs)')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
 
     args = parser.parse_args()
@@ -1547,6 +1892,8 @@ if __name__ == '__main__':
         logging.getLogger().setLevel(logging.DEBUG)
 
     config = load_config(args.config)
+    if not args.no_prompts:
+        config = prompt_missing_api_keys(config, args.config)
     orchestrator = PlexMetadataOrchestrator(config, force=args.force)
 
     specific = args.show or args.movie

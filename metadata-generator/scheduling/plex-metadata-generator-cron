@@ -51,8 +51,8 @@ main() {
             exit 1
         fi
         
-        # Run the metadata generator
-        ${SCRIPT} --config "${CONFIG}"
+        # Run the metadata generator (--no-prompts suppresses API key dialogs in unattended runs)
+        ${SCRIPT} --config "${CONFIG}" --no-prompts
         
         local exit_code=$?
         
