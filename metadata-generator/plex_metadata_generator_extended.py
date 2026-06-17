@@ -189,7 +189,7 @@ class MusicBrainzProvider:
             # Get label
             label = None
             if 'label-info' in data and data['label-info']:
-                label = data['label-info'][0].get('label', {}).get('name')
+                label = (data['label-info'][0].get('label') or {}).get('name')
             
             metadata = AlbumMetadata(
                 title=title,
