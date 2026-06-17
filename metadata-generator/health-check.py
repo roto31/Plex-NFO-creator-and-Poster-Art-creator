@@ -319,6 +319,40 @@ class HealthChecker:
         except Exception as e:
             print(f"  ❌ Plex check failed: {e}")
 
+        # Test local MusicBrainz DB (if configured)
+        try:
+            mb_db_cfg = config.get('musicbrainz_db', {})
+            if mb_db_cfg.get('host') or mb_db_cfg.get('dbname'):
+                if mb_db_cfg.get('skip') is True:
+                    print(f"  ℹ️  Local MusicBrainz DB configured but skip=true — using REST API")
+                else:
+                    try:
+                        import psycopg2  # noqa: PLC0415
+                        conn = psycopg2.connect(
+                            host=mb_db_cfg.get('host', 'localhost'),
+                            port=int(mb_db_cfg.get('port', 5432)),
+                            dbname=mb_db_cfg.get('dbname', 'musicbrainz'),
+                            user=mb_db_cfg.get('user', 'musicbrainz'),
+                            password=mb_db_cfg.get('password', ''),
+                            connect_timeout=5,
+                        )
+                        schema = mb_db_cfg.get('schema', 'musicbrainz')
+                        with conn.cursor() as cur:
+                            cur.execute(f"SELECT COUNT(*) FROM {schema}.artist")
+                            artist_count = cur.fetchone()[0]
+                        conn.close()
+                        result['musicbrainz_local_db'] = True
+                        print(f"  ✅ Local MusicBrainz DB accessible ({artist_count:,} artists)")
+                    except ImportError:
+                        print(f"  ⚠️  Local MusicBrainz DB configured but psycopg2 not installed\n"
+                              f"      Install with: pip install psycopg2-binary")
+                    except Exception as e:
+                        print(f"  ❌ Local MusicBrainz DB connection failed: {e}")
+            else:
+                print(f"  ℹ️  Local MusicBrainz DB not configured — using REST API")
+        except Exception as e:
+            print(f"  ❌ MusicBrainz DB check failed: {e}")
+
         # Test OpenSubtitles (if configured)
         try:
             sub_cfg = config.get('subtitles', {})

@@ -444,6 +444,156 @@ def prompt_force_flag() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Local MusicBrainz DB pre-flight dialog
+# ---------------------------------------------------------------------------
+
+def _test_mb_db_connection(cfg: dict) -> tuple:
+    """
+    Try connecting to the local MusicBrainz PostgreSQL database described
+    by cfg (keys: host, port, dbname, user, password, schema).
+    Returns (ok: bool, message: str).
+    """
+    try:
+        import psycopg2  # noqa: PLC0415
+    except ImportError:
+        return False, ("psycopg2 is not installed.\n\n"
+                       "Install it with:\n    pip install psycopg2-binary\n\n"
+                       "then re-run to use the local database.")
+    try:
+        conn = psycopg2.connect(
+            host=cfg.get('host', 'localhost'),
+            port=int(cfg.get('port', 5432)),
+            dbname=cfg.get('dbname', 'musicbrainz'),
+            user=cfg.get('user', 'musicbrainz'),
+            password=cfg.get('password', ''),
+            connect_timeout=5,
+        )
+        schema = cfg.get('schema', 'musicbrainz')
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {schema}.artist LIMIT 1")
+        conn.close()
+        return True, ''
+    except Exception as e:
+        return False, str(e)
+
+
+def prompt_musicbrainz_local_db(config: dict, config_path: str) -> dict:
+    """
+    Pre-flight dialog: offer to configure a local MusicBrainz PostgreSQL
+    database for music metadata lookups (faster, no rate limits).
+
+    Skipped if musicbrainz_db is already fully configured and reachable,
+    or if the user has previously declined (musicbrainz_db.skip == true).
+    """
+    mb_cfg = config.get('musicbrainz_db', {})
+
+    # Already fully configured and connected — nothing to do
+    if mb_cfg.get('host') or mb_cfg.get('dbname'):
+        ok, _ = _test_mb_db_connection(mb_cfg)
+        if ok:
+            return config
+
+    # User previously chose to skip
+    if mb_cfg.get('skip') is True:
+        return config
+
+    wants_local = _prompt_yesno(
+        'Plex Metadata Generator — Music Metadata',
+        'Do you have a local MusicBrainz PostgreSQL database?\n\n'
+        'A local database provides instant music metadata lookups with no\n'
+        'rate limits or internet dependency — ideal for large music libraries.\n\n'
+        'Download instructions: musicbrainz.org/doc/MusicBrainz_Database/Download\n\n'
+        'If you select No, the script will use the MusicBrainz REST API instead\n'
+        '(free, but rate-limited to ~1 request/second).\n\n'
+        'Do you want to connect to a local MusicBrainz database?'
+    )
+
+    if not wants_local:
+        # Remember the choice so we don't ask again
+        config.setdefault('musicbrainz_db', {})['skip'] = True
+        _save_config_if_agreed(config, config_path,
+                               'Save your choice (skip local MusicBrainz DB) to config?')
+        return config
+
+    # Gather connection details
+    defaults = {
+        'host':     mb_cfg.get('host', 'localhost'),
+        'port':     str(mb_cfg.get('port', 5432)),
+        'dbname':   mb_cfg.get('dbname', 'musicbrainz'),
+        'user':     mb_cfg.get('user', 'musicbrainz'),
+        'password': mb_cfg.get('password', ''),
+        'schema':   mb_cfg.get('schema', 'musicbrainz'),
+    }
+
+    fields = [
+        ('host',     'PostgreSQL host',     'e.g. localhost or 192.168.1.10'),
+        ('port',     'PostgreSQL port',     'default: 5432'),
+        ('dbname',   'Database name',       'default: musicbrainz'),
+        ('user',     'Database user',       'default: musicbrainz'),
+        ('password', 'Database password',   'leave blank if no password'),
+        ('schema',   'Schema name',         'default: musicbrainz'),
+    ]
+
+    new_cfg: dict = {}
+    for key, label, hint in fields:
+        value = _prompt_text(
+            f'Plex Metadata Generator — MusicBrainz DB ({label})',
+            f'{label}\n({hint})',
+            default=defaults[key],
+        )
+        new_cfg[key] = value if value else defaults[key]
+
+    # Validate immediately
+    while True:
+        logger.info("  Testing local MusicBrainz DB connection…")
+        ok, err = _test_mb_db_connection(new_cfg)
+        if ok:
+            logger.info("  ✓ Local MusicBrainz DB connection verified")
+            config['musicbrainz_db'] = new_cfg
+            config['musicbrainz_db'].pop('skip', None)
+            _save_config_if_agreed(config, config_path,
+                                   'Save local MusicBrainz DB settings to config?')
+            return config
+
+        retry = _prompt_yesno(
+            'Plex Metadata Generator — MusicBrainz DB Connection Failed',
+            f'Could not connect to the local MusicBrainz database:\n\n'
+            f'{err}\n\n'
+            'Common causes:\n'
+            '• PostgreSQL is not running  (sudo systemctl start postgresql)\n'
+            '• Wrong host / port / credentials\n'
+            '• Database not yet imported  (see mbdump import docs)\n'
+            '• psycopg2 not installed     (pip install psycopg2-binary)\n\n'
+            'Try entering the connection details again?'
+        )
+        if not retry:
+            logger.info("  Skipping local MusicBrainz DB — will use REST API")
+            return config
+
+        # Re-prompt all fields
+        for key, label, hint in fields:
+            value = _prompt_text(
+                f'Plex Metadata Generator — MusicBrainz DB ({label})',
+                f'{label}\n({hint})',
+                default=new_cfg.get(key, defaults[key]),
+            )
+            new_cfg[key] = value if value else new_cfg.get(key, defaults[key])
+
+
+def _save_config_if_agreed(config: dict, config_path: str, question: str):
+    """Offer to persist config to disk; silently skip if path is unknown."""
+    if not config_path or not os.path.exists(os.path.dirname(os.path.abspath(config_path)) or '.'):
+        return
+    if _prompt_yesno('Plex Metadata Generator — Save Settings', question):
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2)
+            logger.info(f"  Config saved to {config_path}")
+        except IOError as e:
+            logger.warning(f"  Could not save config: {e}")
+
+
+# ---------------------------------------------------------------------------
 # API key definitions — what to check and how to prompt
 # ---------------------------------------------------------------------------
 
@@ -1004,6 +1154,8 @@ class TunarrMetadataProvider:
         self.conn = None
 
     def connect(self) -> bool:
+        if not self.db_path:
+            return False
         try:
             self.conn = sqlite3.connect(self.db_path)
             self.conn.row_factory = sqlite3.Row
@@ -1092,22 +1244,31 @@ class TVDbProvider:
                 imdb_id=data.get('imdbId'),
                 runtime=data.get('runtime', 45),
                 status=data.get('status', {}).get('name', 'Continuing'),
-                genres=data.get('genres', []),
+                genres=[g['name'] for g in data.get('genres', []) if isinstance(g, dict)],
             )
+            def _tvdb_img(path: str) -> str:
+                """Return a full TVDB artwork URL — path may be relative or already absolute."""
+                if path.startswith('http'):
+                    return path
+                return f"https://artworks.thetvdb.com{path}"
+
             # Poster
             for image in data.get('artworks', []):
+                if not isinstance(image, dict): continue
                 if image.get('type') == 1:
-                    meta.poster_url = f"https://artworks.thetvdb.com{image['image']}"
+                    meta.poster_url = _tvdb_img(image['image'])
                     break
             # Banner
             for image in data.get('artworks', []):
+                if not isinstance(image, dict): continue
                 if image.get('type') == 2:
-                    meta.banner_url = f"https://artworks.thetvdb.com{image['image']}"
+                    meta.banner_url = _tvdb_img(image['image'])
                     break
             # Fanart/background
             for image in data.get('artworks', []):
+                if not isinstance(image, dict): continue
                 if image.get('type') == 3:
-                    meta.fanart_url = f"https://artworks.thetvdb.com{image['image']}"
+                    meta.fanart_url = _tvdb_img(image['image'])
                     break
             return meta
         except requests.RequestException as e:
@@ -2288,7 +2449,8 @@ class PlexMetadataOrchestrator:
                 if not isinstance(artwork, dict):
                     continue
                 if artwork.get('season') == season_num:
-                    url = f"https://artworks.thetvdb.com{artwork['image']}"
+                    img = artwork['image']
+                    url = img if img.startswith('http') else f"https://artworks.thetvdb.com{img}"
                     self.dl.download_image(url, season_dir / 'poster.jpg')
                     return
         except requests.RequestException:
@@ -2454,6 +2616,7 @@ if __name__ == '__main__':
     if not args.no_prompts:
         config = prompt_missing_library_paths(config, args.config)
         config = prompt_missing_api_keys(config, args.config)
+        config = prompt_musicbrainz_local_db(config, args.config)
         if not args.force:
             args.force = prompt_force_flag()
 

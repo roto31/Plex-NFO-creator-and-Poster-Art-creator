@@ -22,13 +22,16 @@ import time
 import hashlib
 
 # Configure logging
+_LOG_FILE = '/var/log/plex-metadata-generator.log'
+_handlers: list = [logging.StreamHandler(sys.stdout)]
+try:
+    _handlers.append(logging.FileHandler(_LOG_FILE))
+except (OSError, PermissionError):
+    pass  # running without root; console-only is fine
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/var/log/plex-metadata-generator.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=_handlers,
 )
 logger = logging.getLogger(__name__)
 
@@ -226,6 +229,252 @@ class MusicBrainzProvider:
             return results
         except requests.RequestException as e:
             logger.error(f"MusicBrainz artist search failed: {e}")
+            return []
+
+
+class LocalMusicBrainzProvider:
+    """
+    Query a locally-hosted MusicBrainz PostgreSQL database.
+
+    Requires the mbdump imported into PostgreSQL per:
+    https://musicbrainz.org/doc/MusicBrainz_Database/Download
+
+    Uses psycopg2 (pip install psycopg2-binary).  Falls back gracefully
+    to the REST API provider if psycopg2 is not installed or the
+    connection cannot be established.
+
+    Key schema tables used:
+      artist, release_group, release, recording,
+      medium, track, artist_credit, artist_credit_name
+    """
+
+    def __init__(self, host: str, port: int, dbname: str, user: str, password: str,
+                 schema: str = 'musicbrainz'):
+        self.dsn = dict(host=host, port=port, dbname=dbname, user=user, password=password)
+        self.schema = schema
+        self._conn = None
+        self._available = False
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
+    def connect(self) -> bool:
+        """Return True if connection succeeded; sets self._available."""
+        try:
+            import psycopg2  # noqa: PLC0415
+            import psycopg2.extras  # noqa: PLC0415
+            self._psycopg2 = psycopg2
+            self._conn = psycopg2.connect(**self.dsn)
+            self._conn.autocommit = True
+            self._available = True
+            logger.info(f"Connected to local MusicBrainz DB at {self.dsn['host']}:{self.dsn['port']}/{self.dsn['dbname']}")
+            return True
+        except ImportError:
+            logger.warning("psycopg2 not installed — local MusicBrainz DB unavailable. "
+                           "Install with: pip install psycopg2-binary")
+            return False
+        except Exception as e:
+            logger.warning(f"Could not connect to local MusicBrainz DB: {e}")
+            return False
+
+    def disconnect(self):
+        if self._conn:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            self._available = False
+
+    @property
+    def available(self) -> bool:
+        return self._available and self._conn is not None
+
+    def _q(self, sql: str, params=()) -> list:
+        """Execute query and return list of dicts."""
+        import psycopg2.extras  # noqa: PLC0415
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Artist search  (mirrors MusicBrainzProvider.search_artist interface)
+    # ------------------------------------------------------------------
+
+    def search_artist(self, artist_name: str) -> List[Dict]:
+        """
+        Return up to 5 artist dicts matching name.  Result shape matches the
+        MusicBrainz REST API: {'id': mbid, 'name': ..., 'sort-name': ...}
+        """
+        if not self.available:
+            return []
+        s = self.schema
+        sql = f"""
+            SELECT a.gid::text  AS id,
+                   a.name,
+                   a.sort_name  AS "sort-name",
+                   a.comment,
+                   at.name      AS type,
+                   area.name    AS area
+            FROM   {s}.artist       a
+            LEFT JOIN {s}.artist_type at   ON at.id = a.type
+            LEFT JOIN {s}.area       area  ON area.id = a.area
+            WHERE  unaccent(lower(a.name))      = unaccent(lower(%s))
+               OR  unaccent(lower(a.sort_name)) = unaccent(lower(%s))
+            ORDER BY
+                (lower(a.name) = lower(%s)) DESC,
+                a.name
+            LIMIT 5
+        """
+        try:
+            rows = self._q(sql, (artist_name, artist_name, artist_name))
+            if not rows:
+                # Fuzzy fallback with ILIKE
+                sql_like = f"""
+                    SELECT a.gid::text AS id, a.name, a.sort_name AS "sort-name", a.comment
+                    FROM   {s}.artist a
+                    WHERE  unaccent(a.name) ILIKE unaccent(%s)
+                    ORDER BY length(a.name)
+                    LIMIT 5
+                """
+                rows = self._q(sql_like, (f'%{artist_name}%',))
+            return rows
+        except Exception as e:
+            logger.debug(f"Local MB artist search error: {e}")
+            return []
+
+    # ------------------------------------------------------------------
+    # Release (album) search  (mirrors MusicBrainzProvider.search_release)
+    # ------------------------------------------------------------------
+
+    def search_release(self, album_title: str, artist: str) -> List[Dict]:
+        """
+        Return up to 10 release dicts.
+        Result shape: {'id': mbid, 'title': ..., 'date': ..., 'artist-credit': [...]}
+        """
+        if not self.available:
+            return []
+        s = self.schema
+        sql = f"""
+            SELECT r.gid::text  AS id,
+                   r.name       AS title,
+                   COALESCE(r.date_year::text, '') AS date,
+                   ac.name      AS artist_credit_name
+            FROM   {s}.release          r
+            JOIN   {s}.artist_credit    ac  ON ac.id = r.artist_credit
+            WHERE  unaccent(lower(r.name)) = unaccent(lower(%s))
+              AND  unaccent(lower(ac.name)) ILIKE unaccent(%s)
+            ORDER BY
+                r.date_year DESC NULLS LAST
+            LIMIT 10
+        """
+        try:
+            rows = self._q(sql, (album_title, f'%{artist}%'))
+            if not rows:
+                sql_like = f"""
+                    SELECT r.gid::text AS id, r.name AS title,
+                           COALESCE(r.date_year::text, '') AS date,
+                           ac.name AS artist_credit_name
+                    FROM   {s}.release r
+                    JOIN   {s}.artist_credit ac ON ac.id = r.artist_credit
+                    WHERE  unaccent(r.name) ILIKE unaccent(%s)
+                      AND  unaccent(ac.name) ILIKE unaccent(%s)
+                    ORDER BY r.date_year DESC NULLS LAST
+                    LIMIT 10
+                """
+                rows = self._q(sql_like, (f'%{album_title}%', f'%{artist}%'))
+            return rows
+        except Exception as e:
+            logger.debug(f"Local MB release search error: {e}")
+            return []
+
+    # ------------------------------------------------------------------
+    # Full release fetch  (mirrors MusicBrainzProvider.get_release)
+    # ------------------------------------------------------------------
+
+    def get_release(self, mbid: str) -> Optional['AlbumMetadata']:
+        """Fetch complete album metadata including tracks by release MBID."""
+        if not self.available:
+            return None
+        s = self.schema
+        try:
+            # Release header
+            rows = self._q(f"""
+                SELECT r.name AS title,
+                       r.date_year AS year,
+                       r.date_month, r.date_day,
+                       ac.name AS artist,
+                       l.name  AS label
+                FROM   {s}.release r
+                JOIN   {s}.artist_credit ac ON ac.id = r.artist_credit
+                LEFT JOIN {s}.release_label rl ON rl.release = r.id
+                LEFT JOIN {s}.label         l  ON l.id = rl.label
+                WHERE  r.gid = %s
+                LIMIT  1
+            """, (mbid,))
+            if not rows:
+                return None
+            row = rows[0]
+
+            # Track count
+            tc_rows = self._q(f"""
+                SELECT COUNT(*) AS cnt
+                FROM   {s}.track t
+                JOIN   {s}.medium m ON m.id = t.medium
+                JOIN   {s}.release r ON r.id = m.release
+                WHERE  r.gid = %s
+            """, (mbid,))
+            track_count = tc_rows[0]['cnt'] if tc_rows else 0
+
+            date_str = '-'.join(filter(None, [
+                str(row['year']) if row['year'] else None,
+                f"{row['date_month']:02d}" if row['date_month'] else None,
+                f"{row['date_day']:02d}" if row['date_day'] else None,
+            ]))
+
+            return AlbumMetadata(
+                title=row['title'],
+                artist=row['artist'],
+                year=row['year'] or 0,
+                rating=0.0,
+                mbid=mbid,
+                release_date=date_str,
+                track_count=track_count,
+                label=row['label'],
+            )
+        except Exception as e:
+            logger.debug(f"Local MB get_release error: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Track list for a release
+    # ------------------------------------------------------------------
+
+    def get_tracks(self, release_mbid: str) -> List[Dict]:
+        """
+        Return ordered list of tracks:
+        {'position': int, 'title': str, 'length_ms': int, 'recording_gid': str}
+        """
+        if not self.available:
+            return []
+        s = self.schema
+        try:
+            return self._q(f"""
+                SELECT m.position  AS disc,
+                       t.position  AS position,
+                       t.name      AS title,
+                       rec.length  AS length_ms,
+                       rec.gid::text AS recording_gid
+                FROM   {s}.track     t
+                JOIN   {s}.medium    m   ON m.id = t.medium
+                JOIN   {s}.recording rec ON rec.id = t.recording
+                JOIN   {s}.release   r   ON r.id = m.release
+                WHERE  r.gid = %s
+                ORDER  BY m.position, t.position
+            """, (release_mbid,))
+        except Exception as e:
+            logger.debug(f"Local MB get_tracks error: {e}")
             return []
 
 
@@ -555,12 +804,29 @@ class PlexMetadataOrchestrator:
         # Initialize providers
         self.nfo_generator = PlexNFOGenerator()
         
-        # Music providers
-        mbid_key = config.get('musicbrainz_api_key')
-        self.musicbrainz = None
-        if mbid_key:
-            self.musicbrainz = MusicBrainzProvider(user_agent=f"PlexMetadataGenerator/1.0 (+{config.get('musicbrainz_contact', 'contact@example.com')})")
-        
+        # Music providers — priority: local MB DB → Spotify → MusicBrainz REST API
+        # Local MusicBrainz PostgreSQL database (optional)
+        self.mb_local: Optional[LocalMusicBrainzProvider] = None
+        mb_db_cfg = config.get('musicbrainz_db', {})
+        if mb_db_cfg.get('host') or mb_db_cfg.get('dbname'):
+            provider = LocalMusicBrainzProvider(
+                host=mb_db_cfg.get('host', 'localhost'),
+                port=int(mb_db_cfg.get('port', 5432)),
+                dbname=mb_db_cfg.get('dbname', 'musicbrainz'),
+                user=mb_db_cfg.get('user', 'musicbrainz'),
+                password=mb_db_cfg.get('password', ''),
+                schema=mb_db_cfg.get('schema', 'musicbrainz'),
+            )
+            if provider.connect():
+                self.mb_local = provider
+            else:
+                logger.warning("Local MusicBrainz DB configured but unreachable — falling back to REST API")
+
+        # MusicBrainz REST API (no key required, just user-agent)
+        self.musicbrainz = MusicBrainzProvider(
+            user_agent=f"PlexMetadataGenerator/1.0 (+{config.get('musicbrainz_contact', 'contact@example.com')})"
+        )
+
         spotify_config = config.get('spotify', {})
         self.spotify = None
         if spotify_config.get('client_id') and spotify_config.get('client_secret'):
@@ -623,28 +889,39 @@ class PlexMetadataOrchestrator:
         artist_name = artist_path.name
         logger.info(f"Processing music artist: {artist_name}")
         
-        # Search for artist metadata
+        # Search for artist metadata — priority: local MB DB → Spotify → MB REST API
         artist_metadata = None
-        
-        if self.spotify:
+
+        # 1. Local MusicBrainz DB (fast, no rate limits)
+        if not artist_metadata and self.mb_local and self.mb_local.available:
+            results = self.mb_local.search_artist(artist_name)
+            if results:
+                artist_metadata = ArtistMetadata(
+                    name=results[0]['name'],
+                    mbid=results[0]['id'],
+                )
+                logger.info(f"Found artist '{artist_name}' in local MusicBrainz DB")
+
+        # 2. Spotify (richer images and genres)
+        if not artist_metadata and self.spotify:
             results = self.spotify.search_artist(artist_name)
             if results:
                 artist_id = results[0]['id']
-                # Get additional artist info
                 artist_metadata = ArtistMetadata(
                     name=results[0]['name'],
                     spotify_id=artist_id,
                     genres=results[0].get('genres', []),
-                    image_url=results[0].get('images', [{}])[0].get('url') if results[0].get('images') else None
+                    image_url=results[0].get('images', [{}])[0].get('url') if results[0].get('images') else None,
                 )
                 logger.info(f"Found artist '{artist_name}' on Spotify")
-        
+
+        # 3. MusicBrainz REST API (fallback, rate-limited)
         if not artist_metadata and self.musicbrainz:
             results = self.musicbrainz.search_artist(artist_name)
             if results:
                 artist_metadata = ArtistMetadata(
                     name=results[0]['name'],
-                    mbid=results[0]['id']
+                    mbid=results[0]['id'],
                 )
                 logger.info(f"Found artist '{artist_name}' on MusicBrainz")
         
@@ -681,19 +958,28 @@ class PlexMetadataOrchestrator:
         album_name = album_path.name
         logger.info(f"Processing album: {album_name} by {artist_name}")
         
-        # Search for album metadata
+        # Search for album metadata — priority: local MB DB → Spotify → MB REST API
         album_metadata = None
-        
-        # Try Spotify first
-        if self.spotify:
+
+        # 1. Local MusicBrainz DB
+        if not album_metadata and self.mb_local and self.mb_local.available:
+            results = self.mb_local.search_release(album_name, artist_name)
+            if results:
+                mbid = results[0]['id']
+                album_metadata = self.mb_local.get_release(mbid)
+                if album_metadata:
+                    logger.info(f"Found album '{album_name}' in local MusicBrainz DB")
+
+        # 2. Spotify (has cover art URLs)
+        if not album_metadata and self.spotify:
             results = self.spotify.search_album(album_name, artist_name)
             if results:
                 album_id = results[0]['id']
                 album_metadata = self.spotify.get_album(album_id)
                 if album_metadata:
                     logger.info(f"Found album '{album_name}' on Spotify")
-        
-        # Fallback to MusicBrainz
+
+        # 3. MusicBrainz REST API
         if not album_metadata and self.musicbrainz:
             results = self.musicbrainz.search_release(album_name, artist_name)
             if results:
@@ -819,9 +1105,9 @@ class PlexMetadataOrchestrator:
         try:
             if media_type in ('tv', 'all'):
                 logger.info("Starting TV show metadata generation")
-                if self.tunarr.connect():
-                    self.process_tv_library()
-                    self.tunarr.disconnect()
+                self.tunarr.connect()  # optional; failures are logged and tolerated
+                self.process_tv_library()
+                self.tunarr.disconnect()
                 self.refresh_plex_library(self.tv_library_key)
 
             if media_type in ('movies', 'all'):
