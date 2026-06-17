@@ -253,6 +253,197 @@ def _prompt_yesno(title: str, message: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Native folder-picker dialogs (for library path selection)
+# ---------------------------------------------------------------------------
+
+def _pick_folder_macos(prompt: str) -> Optional[str]:
+    """Native macOS folder browser via AppleScript 'choose folder'."""
+    script = (
+        'tell application "System Events"\n'
+        '    activate\n'
+        f'    set f to choose folder with prompt "{_esc_apl(prompt)}"\n'
+        '    return POSIX path of f\n'
+        'end tell'
+    )
+    try:
+        r = subprocess.run(['osascript', '-e', script],
+                           capture_output=True, text=True, timeout=300)
+        path = r.stdout.strip()
+        return path if path else None
+    except Exception:
+        return None
+
+
+def _pick_folder_linux(prompt: str) -> Optional[str]:
+    """Folder browser via zenity, kdialog, or terminal path entry."""
+    if shutil.which('zenity'):
+        try:
+            r = subprocess.run(
+                ['zenity', '--file-selection', '--directory',
+                 f'--title={prompt}', '--width=600'],
+                capture_output=True, text=True, timeout=300,
+            )
+            if r.returncode == 0:
+                return r.stdout.strip() or None
+        except Exception:
+            pass
+    if shutil.which('kdialog'):
+        try:
+            r = subprocess.run(
+                ['kdialog', '--getexistingdirectory', '/mnt', f'--title={prompt}'],
+                capture_output=True, text=True, timeout=300,
+            )
+            if r.returncode == 0:
+                return r.stdout.strip() or None
+        except Exception:
+            pass
+    # Terminal fallback
+    sep = '─' * 64
+    print(f'\n{sep}\n  {prompt}\n{sep}', flush=True)
+    try:
+        path = input('  Enter folder path (or press Enter to skip): ').strip()
+        return path or None
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def _pick_folder_windows(prompt: str) -> Optional[str]:
+    """Folder browser via PowerShell FolderBrowserDialog."""
+    ps = (
+        'Add-Type -AssemblyName System.Windows.Forms; '
+        '$d = New-Object System.Windows.Forms.FolderBrowserDialog; '
+        f"$d.Description = '{_esc_ps(prompt)}'; "
+        '$d.ShowNewFolderButton = $false; '
+        '[void]$d.ShowDialog(); '
+        'Write-Output $d.SelectedPath'
+    )
+    try:
+        r = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', ps],
+            capture_output=True, text=True, timeout=300,
+        )
+        path = r.stdout.strip()
+        return path if path else None
+    except Exception:
+        return None
+
+
+def _pick_folder(prompt: str) -> Optional[str]:
+    """Show a native OS folder-picker dialog. Returns the selected path or None."""
+    _sys = platform.system()
+    if _sys == 'Darwin':
+        return _pick_folder_macos(prompt)
+    elif _sys == 'Windows':
+        return _pick_folder_windows(prompt)
+    else:
+        return _pick_folder_linux(prompt)
+
+
+def _collect_library_paths(media_label: str) -> List[str]:
+    """
+    Show repeated folder-picker dialogs until the user clicks Done.
+    Returns the list of selected paths (may be empty if user skips).
+    """
+    paths: List[str] = []
+
+    # First ask whether user has this media type
+    has_media = _prompt_yesno(
+        f'Plex Metadata Generator — {media_label} Library',
+        f'Do you have a {media_label} library to configure?\n\n'
+        f'Click Yes to select folder(s), or No to skip {media_label}.'
+    )
+    if not has_media:
+        return paths
+
+    while True:
+        picked = _pick_folder(f'Select {media_label} folder to scan')
+        if picked:
+            paths.append(picked.rstrip('/').rstrip('\\'))
+            # Show current list and offer Add / Done
+            paths_display = '\n'.join(f'  • {p}' for p in paths)
+            add_more = _prompt_yesno(
+                f'Plex Metadata Generator — {media_label} Library',
+                f'Added:\n{paths_display}\n\n'
+                f'Add another {media_label} volume?'
+            )
+            if not add_more:
+                break
+        else:
+            # User cancelled the picker — treat as Done
+            break
+
+    return paths
+
+
+def prompt_missing_library_paths(config: dict, config_path: str) -> dict:
+    """
+    If library paths are not yet configured, show native folder-picker dialogs
+    for Movies, TV Shows, and Music. Updates config in-place and offers to save.
+    """
+    changed = False
+
+    def _already_set(plural_key: str, singular_key: str) -> bool:
+        roots = config.get(plural_key, [])
+        if roots and isinstance(roots, list) and roots[0] and 'YOUR_' not in roots[0]:
+            return True
+        single = config.get(singular_key, '')
+        return bool(single) and 'YOUR_' not in str(single) and single != '/mnt/media/TV' \
+               and single != '/mnt/media/Movies' and single != '/mnt/media/Music'
+
+    media_types = [
+        ('Movies',    'movies_library_roots', 'movies_library_root'),
+        ('TV Shows',  'tv_library_roots',     'tv_library_root'),
+        ('Music',     'music_library_roots',  'music_library_root'),
+    ]
+
+    for label, plural_key, singular_key in media_types:
+        if _already_set(plural_key, singular_key):
+            continue
+        paths = _collect_library_paths(label)
+        if paths:
+            config[plural_key] = paths
+            # Keep singular key pointing at first path for backward compat
+            config[singular_key] = paths[0]
+            changed = True
+            logger.info(f"  {label} library root(s): {paths}")
+
+    if not changed:
+        return config
+
+    save = _prompt_yesno(
+        'Plex Metadata Generator — Save Library Paths',
+        'Save these library paths to the config file so you are not prompted again?\n\n'
+        + config_path
+    )
+    if save:
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2)
+            logger.info(f'  ✓ Config saved: {config_path}')
+        except IOError as e:
+            logger.error(f'  Failed to save config: {e}')
+
+    return config
+
+
+def prompt_force_flag() -> bool:
+    """
+    Ask the user whether to force a full rescan (--force behaviour).
+    Returns True if they want to process all items regardless of existing metadata.
+    """
+    return _prompt_yesno(
+        'Plex Metadata Generator — Scan Mode',
+        'Is this your first time running the Metadata Generator, or do you want '
+        'to force a full rescan of your media folders?\n\n'
+        '• Yes — process EVERY item, even those that already have NFO files and artwork\n'
+        '  (use for first-time setup or to refresh everything)\n\n'
+        '• No — skip items that are already complete\n'
+        '  (recommended for ongoing / scheduled use)\n\n'
+        'Force a full rescan of all media?'
+    )
+
+
+# ---------------------------------------------------------------------------
 # API key definitions — what to check and how to prompt
 # ---------------------------------------------------------------------------
 
@@ -1358,13 +1549,19 @@ class PlexMetadataOrchestrator:
         self.config = config
         self.force = force
 
-        # Library roots — support both old flat key and new split keys
-        self.tv_library_root = Path(
-            config.get('tv_library_root') or config.get('library_root', '/mnt/media/TV')
+        # Library roots — support list (plural) or single-path (singular) config keys
+        self.tv_library_roots = self._resolve_roots(
+            config, 'tv_library_roots', 'tv_library_root', 'library_root'
         )
-        self.movies_library_root = (
-            Path(config['movies_library_root']) if config.get('movies_library_root') else None
+        self.movies_library_roots = self._resolve_roots(
+            config, 'movies_library_roots', 'movies_library_root'
         )
+        self.music_library_roots = self._resolve_roots(
+            config, 'music_library_roots', 'music_library_root'
+        )
+        # Backward-compat aliases (single Path) — used by code that hasn't been updated yet
+        self.tv_library_root = self.tv_library_roots[0] if self.tv_library_roots else Path('/mnt/media/TV')
+        self.movies_library_root = self.movies_library_roots[0] if self.movies_library_roots else None
 
         # Plex config
         plex = config.get('plex', {})
@@ -1406,6 +1603,26 @@ class PlexMetadataOrchestrator:
             self.subtitle_dl: Optional[SubtitleDownloader] = SubtitleDownloader(sub_cfg, lang)
         else:
             self.subtitle_dl = None
+
+    # ------------------------------------------------------------------
+    # Library root helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_roots(config: dict, plural_key: str, *singular_keys: str) -> List[Path]:
+        """
+        Return a list of Path objects for a library type.
+        Checks plural_key (list) first, then each singular_key in order.
+        Returns [] if nothing is configured.
+        """
+        roots = config.get(plural_key)
+        if roots and isinstance(roots, list):
+            return [Path(r) for r in roots if r]
+        for key in singular_keys:
+            v = config.get(key)
+            if v:
+                return [Path(v)]
+        return []
 
     # ------------------------------------------------------------------
     # Selective processing helpers
@@ -1458,24 +1675,25 @@ class PlexMetadataOrchestrator:
     # ------------------------------------------------------------------
 
     def process_movie_library(self, specific_movie: str = None):
-        if not self.movies_library_root:
+        if not self.movies_library_roots:
             logger.warning("movies_library_root not configured — skipping movie processing")
             return
-        if not self.movies_library_root.exists():
-            logger.error(f"Movie library root does not exist: {self.movies_library_root}")
-            return
 
-        folders = sorted(self.movies_library_root.iterdir())
-        for folder in folders:
-            if not folder.is_dir() or folder.name.startswith('.'):
+        for root in self.movies_library_roots:
+            if not root.exists():
+                logger.error(f"Movie library root does not exist: {root}")
                 continue
-            if specific_movie and folder.name != specific_movie:
-                continue
-            if is_multipart(folder.name):
-                logger.info(f"⏭ {folder.name} — multi-part, skipping")
-                continue
-            self._process_one_movie(folder)
-            time.sleep(0.5)  # gentle rate limiting
+            logger.info(f"Scanning movie library: {root}")
+            for folder in sorted(root.iterdir()):
+                if not folder.is_dir() or folder.name.startswith('.'):
+                    continue
+                if specific_movie and folder.name != specific_movie:
+                    continue
+                if is_multipart(folder.name):
+                    logger.info(f"⏭ {folder.name} — multi-part, skipping")
+                    continue
+                self._process_one_movie(folder)
+                time.sleep(0.5)  # gentle rate limiting
 
         if self.movies_library_key:
             self.refresh_plex_library(self.movies_library_key)
@@ -1596,17 +1814,22 @@ class PlexMetadataOrchestrator:
     # ------------------------------------------------------------------
 
     def process_tv_library(self, specific_show: str = None):
-        if not self.tv_library_root.exists():
-            logger.error(f"TV library root does not exist: {self.tv_library_root}")
+        if not self.tv_library_roots:
+            logger.error("tv_library_root not configured — skipping TV processing")
             return
 
-        for show_dir in sorted(self.tv_library_root.iterdir()):
-            if not show_dir.is_dir() or show_dir.name.startswith('.'):
+        for root in self.tv_library_roots:
+            if not root.exists():
+                logger.error(f"TV library root does not exist: {root}")
                 continue
-            if specific_show and show_dir.name != specific_show:
-                continue
-            self._process_one_show(show_dir)
-            time.sleep(0.5)
+            logger.info(f"Scanning TV library: {root}")
+            for show_dir in sorted(root.iterdir()):
+                if not show_dir.is_dir() or show_dir.name.startswith('.'):
+                    continue
+                if specific_show and show_dir.name != specific_show:
+                    continue
+                self._process_one_show(show_dir)
+                time.sleep(0.5)
 
         self.refresh_plex_library(self.tv_library_key)
 
@@ -1893,7 +2116,10 @@ if __name__ == '__main__':
 
     config = load_config(args.config)
     if not args.no_prompts:
+        config = prompt_missing_library_paths(config, args.config)
         config = prompt_missing_api_keys(config, args.config)
+        if not args.force:
+            args.force = prompt_force_flag()
     orchestrator = PlexMetadataOrchestrator(config, force=args.force)
 
     specific = args.show or args.movie

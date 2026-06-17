@@ -40,6 +40,44 @@ When `Movie.nfo` already exists but artwork is missing, the script reads the `<u
 
 ---
 
+## First-Run Setup Dialogs
+
+When you run the script for the first time (or when required settings are missing from the config file), a series of native OS dialogs guides you through setup — no config file editing required.
+
+### 1 — Library paths (Movies, TV Shows, Music)
+
+For each media type, a dialog asks whether you have that library. If you click **Yes**, a native folder-browser opens so you can select the root volume. After each selection you see:
+
+> **Add another volume?** — **Yes** | **No**
+
+Click **Yes** to add a second drive, NAS share, or USB volume of the same type. Click **No** (Done) when all volumes for that media type have been added. Repeat for TV Shows and Music.
+
+All selected paths are written to the config as a list (`movies_library_roots`, `tv_library_roots`, `music_library_roots`) so every volume is scanned on every run.
+
+### 2 — API keys
+
+For each service whose key is missing or contains a placeholder value, a dialog shows the service name, what it's used for, where to get a free key, and a text field to enter it. Required keys (TMDB, TVDB) show a warning if skipped; optional keys (FanArt.tv, Plex token, OpenSubtitles) are silently skipped.
+
+### 3 — Scan mode
+
+After path and key setup, a dialog asks:
+
+> **Force a full rescan of all media?**
+> • **Yes** — process every item, even those that already have NFO files and artwork *(first-time setup or full refresh)*
+> • **No** — skip items that are already complete *(recommended for ongoing / scheduled use)*
+
+Choosing **Yes** is equivalent to passing `--force` on the command line.
+
+### 4 — Save to config
+
+After each dialog group (paths, keys) a **Save?** dialog offers to write the answers back to the config file so you are never prompted again for that information.
+
+### Suppressing dialogs for scheduled runs
+
+All dialogs are bypassed when `--no-prompts` is passed. Every scheduling artifact (LaunchAgent, systemd service, cron, Windows Task Scheduler) includes this flag automatically.
+
+---
+
 ## CLI Reference
 
 ### `plex_metadata_generator.py`
@@ -55,6 +93,7 @@ python3 plex_metadata_generator.py [OPTIONS]
 | `--show NAME` | — | Process only this TV show folder |
 | `--movie NAME` | — | Process only this movie folder |
 | `--force` | off | Overwrite existing NFO and artwork |
+| `--no-prompts` | off | Skip all setup dialogs (for unattended/scheduled runs) |
 | `--debug` | off | Enable debug logging |
 
 ### `plex_metadata_generator_extended.py`
@@ -76,6 +115,8 @@ python3 plex_metadata_generator_extended.py [OPTIONS]
 ## Configuration Reference
 
 ### `plex-metadata-generator.conf` (TV + Movies)
+
+Single-volume example (the setup dialogs populate this automatically):
 
 ```json
 {
@@ -102,6 +143,18 @@ python3 plex_metadata_generator_extended.py [OPTIONS]
 ```
 
 `fanart_tv.api_key` is optional — if absent, `clearart.png`, `disc.png`, and `logo.png` are skipped with a warning. All other artwork downloads (poster, backdrop, folder) still work without it.
+
+**Multi-volume example** — when you have media spread across multiple drives:
+
+```json
+{
+  "tv_library_roots":     ["/Volumes/Drive1/TV", "/Volumes/Drive2/TV"],
+  "movies_library_roots": ["/Volumes/Drive1/Movies", "/Volumes/NAS/Movies"],
+  "music_library_roots":  ["/Volumes/Drive1/Music"]
+}
+```
+
+The plural keys (`*_library_roots`) take priority over the singular keys (`*_library_root`). The setup dialogs populate the plural form automatically when you add more than one volume.
 
 ### Extended config adds
 

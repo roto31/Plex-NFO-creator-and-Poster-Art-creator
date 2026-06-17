@@ -253,6 +253,37 @@ The core scripts (`extract_artwork.py`) only extract embedded MP4 artwork. The *
 
 ---
 
+## Metadata Generator Setup
+
+**Q: Do I need to edit the config file before running?**
+
+A: No. On first run, the script shows a series of native OS dialogs that walk you through setup:
+1. **Library paths** — a folder browser for Movies, TV Shows, and Music (with Add/Done to add multiple volumes)
+2. **API keys** — a text-input dialog for each service whose key is missing
+3. **Scan mode** — Yes/No dialog asking whether to process everything or only new items
+4. **Save** — offers to write your answers back to the config file so you are never prompted again
+
+All dialogs are bypassed by passing `--no-prompts` (used automatically by the scheduling installers).
+
+---
+
+**Q: I have movies on two different drives. How do I add both?**
+
+A: During the first-run setup dialog for Movies, click **Yes** when asked "Add another volume?" and select your second drive. You can add as many volumes as you have. All paths are saved to `movies_library_roots` in the config as a list and scanned on every run.
+
+You can also edit the config directly:
+```json
+"movies_library_roots": ["/Volumes/Drive1/Movies", "/Volumes/NAS/Movies"]
+```
+
+---
+
+**Q: What does "Force a full rescan" mean?**
+
+A: The force-scan dialog (shown at the end of first-run setup) is equivalent to passing `--force` on the command line. Choosing **Yes** causes the script to process every item — even those that already have NFO files and artwork. Choosing **No** (the default for ongoing use) skips anything already complete.
+
+---
+
 ## Metadata Generator
 
 **Q: Does the Metadata Generator replace `scraper.py`?**
