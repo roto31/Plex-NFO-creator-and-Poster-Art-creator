@@ -1,0 +1,90 @@
+version: '3.9'
+
+services:
+  plex-metadata-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    image: plex-metadata-generator:latest
+    container_name: plex-metadata-generator
+    
+    # Run as non-root user
+    user: "1000:1000"
+    
+    # Mount volumes
+    volumes:
+      # TV library (read-write)
+      - /mnt/media/TV:/mnt/media/TV:rw
+      
+      # Tunarr database (read-only)
+      - /opt/tunarr/cache:/opt/tunarr/cache:ro
+      
+      # Configuration (read-only)
+      - ./plex-metadata-generator.conf:/app/plex-metadata-generator.conf:ro
+      
+      # Cache directory (read-write)
+      - plex-metadata-cache:/var/cache/plex-metadata:rw
+      
+      # Logs (read-write)
+      - plex-metadata-logs:/var/log/plex-metadata-generator:rw
+    
+    # Environment variables (optional)
+    environment:
+      - PLEX_URL=${PLEX_URL:-http://plex:32400}
+      - PLEX_TOKEN=${PLEX_TOKEN}
+      - TVDB_API_KEY=${TVDB_API_KEY}
+      - TMDB_API_KEY=${TMDB_API_KEY}
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Network configuration
+    networks:
+      - plex-network
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "test", "-f", "/var/cache/plex-metadata/.health"]
+      interval: 5m
+      timeout: 1m
+      retries: 3
+      start_period: 10s
+    
+    # Entrypoint
+    entrypoint: >
+      sh -c "
+      echo 'Starting Plex Metadata Generator...' &&
+      python3 /app/plex_metadata_generator.py 
+        --config /app/plex-metadata-generator.conf &&
+      echo '$(date)' > /var/cache/plex-metadata/.health &&
+      sleep infinity
+      "
+
+volumes:
+  plex-metadata-cache:
+    driver: local
+  
+  plex-metadata-logs:
+    driver: local
+
+networks:
+  plex-network:
+    driver: bridge

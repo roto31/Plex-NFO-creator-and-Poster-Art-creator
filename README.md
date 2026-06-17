@@ -8,12 +8,24 @@ A suite of Python scripts that generate Plex-compatible `.nfo` metadata files an
 
 ## Scripts
 
+### Core Suite
+
 | Script | Purpose |
 |--------|---------|
 | [`scraper.py`](scraper.py) | Queries TMDB / TVDB and generates `.nfo` sidecar files for every movie, show, season, and episode |
 | [`extract_artwork.py`](extract_artwork.py) | Extracts embedded cover art from MP4/M4V files and saves as `poster.jpg` sidecar files |
 | [`rename_movies.py`](rename_movies.py) | Cleans folder and file names (strips quality tags, leading numbers, junk) before scraping |
 | [`preflight.py`](preflight.py) | Shared module: dependency checks, auto-install, OS-native notifications, progress window, and logging |
+
+### Metadata Generator (Automated Scheduling)
+
+| Script | Purpose |
+|--------|---------|
+| [`metadata-generator/plex_metadata_generator.py`](metadata-generator/plex_metadata_generator.py) | Automated daily TV show NFO generator with Tunarr/TVDB/TMDB integration and Plex auto-refresh |
+| [`metadata-generator/plex_metadata_generator_extended.py`](metadata-generator/plex_metadata_generator_extended.py) | Extended version with Music library support (Spotify + MusicBrainz) |
+| [`metadata-generator/health-check.py`](metadata-generator/health-check.py) | System diagnostics — verifies config, API connectivity, scheduling, and disk space |
+
+The Metadata Generator is a complementary automation layer: the core suite handles batch initial processing, while the Metadata Generator runs daily to pick up new content and trigger Plex refreshes automatically. See [`METADATA_GENERATOR_INTEGRATION.md`](METADATA_GENERATOR_INTEGRATION.md) for how to use them together.
 
 ---
 
@@ -203,6 +215,18 @@ Full documentation, Mermaid process diagrams, NFO format reference, and troubles
 | [Plex Configuration](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Plex-Configuration) | Agent setup, refresh procedure |
 | [Troubleshooting](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Troubleshooting) | Common errors and fixes |
 | [FAQ](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/FAQ) | Frequently asked questions |
+
+### Metadata Generator Documentation
+
+| File | Contents |
+|------|----------|
+| [`METADATA_GENERATOR_INTEGRATION.md`](METADATA_GENERATOR_INTEGRATION.md) | How the Metadata Generator fits alongside the core suite |
+| [`metadata-generator/README.md`](metadata-generator/README.md) | 5-minute quick start, configuration reference, scheduling, troubleshooting |
+| [`metadata-generator/INSTALL.md`](metadata-generator/INSTALL.md) | Detailed platform-specific install guide |
+| [`docs/INTEGRATION_GUIDE.md`](docs/INTEGRATION_GUIDE.md) | Unified workflow guide for using both tools together |
+| [`docs/WORKFLOWS_AND_DIAGRAMS.md`](docs/WORKFLOWS_AND_DIAGRAMS.md) | 13 Mermaid architecture and workflow diagrams |
+| [`docs/MUSIC_GUIDE.md`](docs/MUSIC_GUIDE.md) | Setting up Music metadata with Spotify + MusicBrainz |
+| [`docs/RELEASE_NOTES_v1.1.md`](docs/RELEASE_NOTES_v1.1.md) | v1.1 changelog |
 
 ---
 

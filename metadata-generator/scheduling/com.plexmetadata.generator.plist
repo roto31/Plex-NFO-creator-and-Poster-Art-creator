@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+
+  <!-- ============================================================ -->
+  <!--  Plex Metadata Generator — macOS LaunchAgent                 -->
+  <!--                                                              -->
+  <!--  Install:                                                     -->
+  <!--    cp com.plexmetadata.generator.plist \                      -->
+  <!--       ~/Library/LaunchAgents/                                -->
+  <!--    launchctl load \                                           -->
+  <!--       ~/Library/LaunchAgents/com.plexmetadata.generator.plist -->
+  <!--                                                              -->
+  <!--  Runs daily at 2:00 AM as your user (no sudo required)       -->
+  <!-- ============================================================ -->
+
+  <key>Label</key>
+  <string>com.plexmetadata.generator</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/usr/local/bin/plex_metadata_generator_extended.py</string>
+    <string>--config</string>
+    <string>/usr/local/etc/plex-metadata-generator.conf</string>
+    <string>--media-type</string>
+    <string>all</string>
+  </array>
+
+  <!-- Run daily at 2:00 AM -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>2</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <!-- Re-run if the scheduled time was missed (e.g. Mac was asleep) -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Log stdout and stderr to ~/Library/Logs -->
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/Library/Logs/plex-metadata-generator.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/Library/Logs/plex-metadata-generator-error.log</string>
+
+  <!-- Keep the job alive if it crashes (set false for a scheduled script) -->
+  <key>KeepAlive</key>
+  <false/>
+
+  <!-- Low priority so it does not compete with foreground apps -->
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Give the network time to come up before running -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <!-- Environment — inherit PATH from your shell -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>/Users/YOUR_USERNAME</string>
+  </dict>
+
+</dict>
+</plist>
