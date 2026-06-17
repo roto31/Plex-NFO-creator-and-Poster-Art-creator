@@ -2685,18 +2685,32 @@ class PlexMetadataOrchestrator:
 # Config loading
 # ---------------------------------------------------------------------------
 
-def load_config(config_file: str = '/etc/plex-metadata-generator.conf') -> Dict:
+def _default_config_path() -> str:
+    """Return a writable per-user default config path (no root required)."""
+    import platform
+    system = platform.system()
+    if system == 'Darwin':
+        base = Path.home() / 'Library' / 'Application Support' / 'PlexMetadataGenerator'
+    elif system == 'Windows':
+        base = Path(os.environ.get('APPDATA', Path.home())) / 'PlexMetadataGenerator'
+    else:
+        base = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'plex-metadata-generator'
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base / 'plex-metadata-generator.conf')
+
+
+def load_config(config_file: str) -> Dict:
+    if not os.path.exists(config_file):
+        logger.info(f"Config not found at {config_file} — a blank config will be created during setup")
+        return {}
     try:
         with open(config_file) as f:
             # Strip // comments (not valid JSON but common in conf files)
             # Use negative lookbehind to avoid stripping URLs (http://, https://)
             text = re.sub(r'(?<!:)//[^\n]*', '', f.read())
             return json.loads(text)
-    except FileNotFoundError:
-        logger.error(f"Configuration file not found: {config_file}")
-        sys.exit(1)
     except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in configuration: {e}")
+        logger.error(f"Invalid JSON in configuration file {config_file}: {e}")
         sys.exit(1)
 
 
@@ -2710,8 +2724,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Plex Metadata NFO Generator — TV shows and Movies'
     )
-    parser.add_argument('--config', default='/etc/plex-metadata-generator.conf',
-                        help='Configuration file path')
+    parser.add_argument('--config', default=_default_config_path(),
+                        help='Configuration file path (default: OS-appropriate user config directory)')
     parser.add_argument('--media-type', choices=['tv', 'movies', 'all'], default='tv',
                         help='Which library to process (default: tv)')
     parser.add_argument('--show', help='Process only this TV show folder name')
