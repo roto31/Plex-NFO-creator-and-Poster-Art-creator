@@ -1425,11 +1425,7 @@ class PlexMetadataOrchestrator:
         
         # Download artist image if available
         if artist_metadata.image_url:
-            self.downloader.download_image(
-                artist_metadata.image_url,
-                artist_path,
-                'artist.jpg'
-            )
+            self.downloader.download_image(artist_metadata.image_url, artist_path / 'artist.jpg')
         
         # Process albums in this artist directory
         for album_dir in artist_path.iterdir():
@@ -1512,11 +1508,7 @@ class PlexMetadataOrchestrator:
         
         # Download cover art
         if album_metadata.cover_url:
-            self.downloader.download_image(
-                album_metadata.cover_url,
-                album_path,
-                'folder.jpg'
-            )
+            self.downloader.download_image(album_metadata.cover_url, album_path / 'folder.jpg')
         
         # Process individual tracks
         self._process_album_tracks(album_path, album_metadata, artist_metadata)
