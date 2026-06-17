@@ -467,7 +467,119 @@ def _is_placeholder(v: str) -> bool:
     return not v or 'YOUR_' in v
 
 
-# Keys to check; 'required' means a missing value logs an error (not just a warning)
+# ---------------------------------------------------------------------------
+# API key validators — each returns (is_valid: bool, error_message: str)
+# ---------------------------------------------------------------------------
+
+def _validate_tmdb(key: str, _config: dict) -> tuple:
+    try:
+        r = requests.get(
+            'https://api.themoviedb.org/3/configuration',
+            params={'api_key': key}, timeout=10
+        )
+        if r.status_code == 200:
+            return True, ''
+        if r.status_code == 401:
+            return False, r.json().get('status_message', 'Invalid API key')
+        return False, f'Unexpected response: HTTP {r.status_code}'
+    except requests.RequestException as e:
+        return False, f'Network error — could not reach TMDB: {e}'
+
+
+def _validate_tvdb(key: str, _config: dict) -> tuple:
+    try:
+        r = requests.post(
+            'https://api4.thetvdb.com/v4/login',
+            json={'apikey': key}, timeout=10
+        )
+        if r.status_code == 200:
+            return True, ''
+        msg = r.json().get('message', '') if r.headers.get('content-type', '').startswith('application/json') else ''
+        return False, msg or f'HTTP {r.status_code} — check that your TVDB key is active'
+    except requests.RequestException as e:
+        return False, f'Network error — could not reach TVDB: {e}'
+
+
+def _validate_plex(token: str, config: dict) -> tuple:
+    plex_url = config.get('plex', {}).get('url', 'http://localhost:32400')
+    try:
+        r = requests.get(
+            f'{plex_url}/library/sections',
+            headers={'X-Plex-Token': token, 'Accept': 'application/json'},
+            timeout=10
+        )
+        if r.status_code == 200:
+            return True, ''
+        if r.status_code == 401:
+            return False, 'Token rejected — it may have been revoked or expired'
+        return False, f'HTTP {r.status_code} from Plex at {plex_url}'
+    except requests.RequestException as e:
+        return False, f'Could not reach Plex at {plex_url}: {e}'
+
+
+def _validate_fanart(key: str, _config: dict) -> tuple:
+    # Use TMDB ID 550 (Fight Club) as a known-good probe
+    try:
+        r = requests.get(
+            f'https://webservice.fanart.tv/v3/movies/550',
+            params={'api_key': key}, timeout=10
+        )
+        if r.status_code == 200:
+            return True, ''
+        if r.status_code in (401, 403):
+            return False, 'API key not recognised — verify it at fanart.tv/profile'
+        return False, f'HTTP {r.status_code} from FanArt.tv'
+    except requests.RequestException as e:
+        return False, f'Network error — could not reach FanArt.tv: {e}'
+
+
+def _validate_opensubtitles(key: str, config: dict) -> tuple:
+    try:
+        r = requests.get(
+            'https://api.opensubtitles.com/api/v1/infos/user',
+            headers={'Api-Key': key, 'Content-Type': 'application/json'},
+            timeout=10
+        )
+        # 200 = authenticated, 401 = bad key, 403 = quota exceeded (key still valid)
+        if r.status_code in (200, 403):
+            return True, ''
+        if r.status_code == 401:
+            return False, 'API key not recognised — verify it at opensubtitles.com/consumers'
+        return False, f'HTTP {r.status_code} from OpenSubtitles'
+    except requests.RequestException as e:
+        return False, f'Network error — could not reach OpenSubtitles: {e}'
+
+
+def _validate_subdl(key: str, _config: dict) -> tuple:
+    if not key:
+        return True, ''   # Subdl works without a key
+    try:
+        r = requests.get(
+            'https://api.subdl.com/api/v1/subtitles',
+            params={'imdb_id': 'tt0133093', 'languages': 'EN', 'api_key': key},
+            timeout=10
+        )
+        if r.status_code in (200, 204):
+            return True, ''
+        if r.status_code in (401, 403):
+            return False, 'API key not recognised — verify it at subdl.com/account'
+        return False, f'HTTP {r.status_code} from Subdl'
+    except requests.RequestException as e:
+        return False, f'Network error — could not reach Subdl: {e}'
+
+
+def _validate_api_key(spec: dict, value: str, config: dict) -> tuple:
+    """Dispatch to the correct validator for this spec. Returns (valid, error_str)."""
+    validator = spec.get('validator')
+    if validator is None:
+        return True, ''   # no validator defined — assume valid
+    try:
+        return validator(value, config)
+    except Exception as e:
+        return False, f'Validation error: {e}'
+
+
+# Keys to check; 'required' means a missing value blocks the run (not just a warning)
 _KEY_SPECS = [
     {
         'path': ['tmdb', 'api_key'],
@@ -475,6 +587,7 @@ _KEY_SPECS = [
         'used_for': 'movie and TV show metadata, poster and backdrop images',
         'url': 'https://www.themoviedb.org/settings/api',
         'required': True,
+        'validator': _validate_tmdb,
     },
     {
         'path': ['tvdb', 'api_key'],
@@ -482,6 +595,7 @@ _KEY_SPECS = [
         'used_for': 'TV show and episode metadata, season/episode artwork',
         'url': 'https://thetvdb.com/api-information',
         'required': True,
+        'validator': _validate_tvdb,
     },
     {
         'path': ['plex', 'token'],
@@ -489,6 +603,7 @@ _KEY_SPECS = [
         'used_for': 'triggering a Plex library refresh after each run',
         'url': 'https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/',
         'required': False,
+        'validator': _validate_plex,
     },
     {
         'path': ['fanart_tv', 'api_key'],
@@ -496,6 +611,7 @@ _KEY_SPECS = [
         'used_for': 'clearart, disc art, and logo images for movies and TV shows',
         'url': 'https://fanart.tv/get-an-api-key/',
         'required': False,
+        'validator': _validate_fanart,
     },
     {
         'path': ['subtitles', 'opensubtitles', 'api_key'],
@@ -504,6 +620,7 @@ _KEY_SPECS = [
         'url': 'https://www.opensubtitles.com/consumers',
         'required': False,
         'condition': lambda cfg: cfg.get('subtitles', {}).get('enabled', False),
+        'validator': _validate_opensubtitles,
     },
     {
         'path': ['subtitles', 'subdl', 'api_key'],
@@ -511,76 +628,100 @@ _KEY_SPECS = [
         'used_for': 'subtitle download fallback (optional — works without a key)',
         'url': 'https://subdl.com/api',
         'required': False,
-        'optional_skip': True,   # Subdl works without a key; only prompt if user wants one
+        'optional_skip': True,
         'condition': lambda cfg: cfg.get('subtitles', {}).get('enabled', False),
+        'validator': _validate_subdl,
     },
 ]
 
 
-def prompt_missing_api_keys(config: dict, config_path: str) -> dict:
+def _prompt_key_with_validation(spec: dict, config: dict,
+                                title_prefix: str = '') -> Optional[str]:
     """
-    Check each API key in the config. For any that are missing or contain
-    placeholder values, show a native OS text-input dialog asking the user
-    to enter the key. Offer to save the updated config back to disk.
-    Returns the (possibly updated) config dict.
+    Show a text-input dialog for one API key. After entry, validate the key
+    against the live API. If invalid, show an error dialog and offer a retry.
+    Returns the valid value, or None if the user skipped.
     """
-    prompted: list = []   # (path, new_value) pairs that were filled in
+    service = spec['name']
+    url = spec['url']
+    used_for = spec['used_for']
+    optional_skip = spec.get('optional_skip', False)
+    required_label = '' if spec['required'] or optional_skip else ' (optional — press Skip to skip)'
 
-    for spec in _KEY_SPECS:
-        # Skip if this key has a condition (e.g. subtitles must be enabled)
-        condition = spec.get('condition')
-        if condition and not condition(config):
-            continue
-
-        # Skip optional-skip keys unless the user explicitly enables subtitles
-        # but they are still surfaced after the main ones via the same loop
-        current = _get_nested(config, *spec['path'])
-        if not _is_placeholder(current):
-            continue  # key is already set — nothing to do
-
-        key_name = spec['path'][-1].replace('_', ' ')
-        service = spec['name']
-        used_for = spec['used_for']
-        url = spec['url']
-        required_label = '' if spec['required'] else ' (optional — press Skip to skip)'
-        optional_skip = spec.get('optional_skip', False)
-
-        title = f"Plex Metadata Generator — {service} Key Needed"
-        message = (
+    if optional_skip:
+        base_msg = (
+            f"{service} API key is optional — the service works without one.\n\n"
+            f"Used for: {used_for}\n\n"
+            f"Get a key at:\n{url}\n\n"
+            f"Enter your {service} API key, or press Skip to continue without one:"
+        )
+    else:
+        base_msg = (
             f"{service} API key is not configured.\n\n"
             f"Used for: {used_for}\n\n"
             f"Get a free key at:\n{url}\n\n"
             f"Enter your {service} API key{required_label}:"
         )
 
-        if optional_skip:
-            # For keys that truly work without a value, offer a clearer skip path
-            message = (
-                f"{service} API key is optional — Subdl works without one.\n\n"
-                f"Used for: {used_for}\n\n"
-                f"Get a key at:\n{url}\n\n"
-                f"Enter your {service} API key, or press Skip to continue without one:"
-            )
+    title = f"{title_prefix}Plex Metadata Generator — {service} Key"
 
-        value = _prompt_text(title, message)
+    while True:
+        value = _prompt_text(title, base_msg)
+        if not value or _is_placeholder(value):
+            return None
 
-        if value and not _is_placeholder(value):
+        # Validate the entered key
+        logger.info(f"  Validating {service} API key...")
+        valid, error_msg = _validate_api_key(spec, value, config)
+
+        if valid:
+            logger.info(f"  ✓ {service} API key validated")
+            return value
+
+        # Key failed validation — show error and offer retry
+        retry = _prompt_yesno(
+            f'Plex Metadata Generator — {service} Key Invalid',
+            f'The {service} API key could not be verified:\n\n'
+            f'{error_msg}\n\n'
+            f'Please verify the key is correct and active at:\n{url}\n\n'
+            f'Try entering the key again?'
+        )
+        if not retry:
+            logger.warning(f"  ⚠ {service} key skipped after failed validation")
+            return None
+        # Loop — show the input dialog again
+
+
+def prompt_missing_api_keys(config: dict, config_path: str) -> dict:
+    """
+    For each API key that is missing or a placeholder, show a native input
+    dialog, validate the entered key against the live API, and retry on failure.
+    Offer to save the updated config to disk when done.
+    """
+    prompted: list = []   # (path, value) pairs that were successfully entered
+
+    for spec in _KEY_SPECS:
+        condition = spec.get('condition')
+        if condition and not condition(config):
+            continue
+
+        current = _get_nested(config, *spec['path'])
+        if not _is_placeholder(current):
+            continue  # already set — handled by revalidation, not here
+
+        value = _prompt_key_with_validation(spec, config)
+
+        if value:
             _set_nested(config, spec['path'], value)
             prompted.append((spec['path'], value))
-            logger.info(f"  ✓ {service} API key entered")
         elif spec['required']:
-            logger.warning(
-                f"  ⚠ {service} API key was skipped — {spec['used_for']} will not work"
-            )
+            logger.warning(f"  ⚠ {spec['name']} key skipped — {spec['used_for']} will not work")
         else:
-            logger.info(f"  ⏭ {service} API key skipped")
+            logger.info(f"  ⏭ {spec['name']} key skipped")
 
     if not prompted:
         return config
 
-    # Offer to save the updated config back to disk
-    keys_entered = ', '.join(spec[0][-1].replace('_', ' ') for spec in
-                             [(p,) for p in prompted])  # cosmetic list
     keys_label = ', '.join(path[-1].replace('_', ' ') for path, _ in prompted)
     save = _prompt_yesno(
         'Plex Metadata Generator — Save API Keys',
@@ -588,7 +729,6 @@ def prompt_missing_api_keys(config: dict, config_path: str) -> dict:
         f"Save to config file so you are not prompted again?\n\n"
         f"{config_path}"
     )
-
     if save:
         try:
             with open(config_path, 'w', encoding='utf-8') as f:
@@ -596,6 +736,168 @@ def prompt_missing_api_keys(config: dict, config_path: str) -> dict:
             logger.info(f"  ✓ Config saved: {config_path}")
         except IOError as e:
             logger.error(f"  Failed to save config: {e}")
+
+    return config
+
+
+# ---------------------------------------------------------------------------
+# 15-day scheduled key revalidation
+# ---------------------------------------------------------------------------
+
+_REVALIDATION_INTERVAL_DAYS = 15
+_STATE_FILENAME = 'key_validation_state.json'
+
+
+def _state_file_path(cache_dir: str) -> Path:
+    return Path(cache_dir) / _STATE_FILENAME
+
+
+def _load_validation_state(cache_dir: str) -> dict:
+    p = _state_file_path(cache_dir)
+    try:
+        if p.exists():
+            return json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_validation_state(cache_dir: str, state: dict):
+    p = _state_file_path(cache_dir)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(state, indent=2), encoding='utf-8')
+    except Exception as e:
+        logger.debug(f"Could not save validation state: {e}")
+
+
+def revalidate_all_keys(config: dict, config_path: str,
+                        cache_dir: str = '/var/cache/plex-metadata') -> dict:
+    """
+    Check whether 15 days have passed since the last API key validation.
+    If so, test every configured key against its live API. For any key that
+    fails, show a blocking dialog with the exact expiry message and loop
+    until a valid key is entered (or the user explicitly skips).
+    Always updates the validation timestamp when a full check is performed.
+    """
+    state = _load_validation_state(cache_dir)
+    last_raw = state.get('last_validated')
+
+    if last_raw:
+        try:
+            last_dt = datetime.fromisoformat(last_raw)
+            elapsed = datetime.now() - last_dt
+            if elapsed.days < _REVALIDATION_INTERVAL_DAYS:
+                logger.debug(
+                    f"API key validation not due yet "
+                    f"(last checked {elapsed.days}d ago; next in "
+                    f"{_REVALIDATION_INTERVAL_DAYS - elapsed.days}d)"
+                )
+                return config
+        except ValueError:
+            pass  # malformed date — revalidate now
+
+    logger.info(f"Running scheduled API key validation (every {_REVALIDATION_INTERVAL_DAYS} days)...")
+    any_changed = False
+
+    for spec in _KEY_SPECS:
+        condition = spec.get('condition')
+        if condition and not condition(config):
+            continue
+
+        current = _get_nested(config, *spec['path'])
+        if not current or _is_placeholder(current):
+            continue  # unconfigured keys are handled by prompt_missing_api_keys
+
+        service = spec['name']
+        url = spec['url']
+        logger.info(f"  Checking {service} API key...")
+        valid, error_msg = _validate_api_key(spec, current, config)
+
+        if valid:
+            logger.info(f"  ✓ {service} key OK")
+            state[' '.join(spec['path'])] = {
+                'valid': True,
+                'checked_at': datetime.now().isoformat(),
+            }
+            continue
+
+        # Key has expired or is inactive — show the blocking dialog
+        logger.warning(f"  ✗ {service} key invalid: {error_msg}")
+
+        while True:
+            new_value = _prompt_text(
+                f'Plex Metadata Generator — {service} Key Expired',
+                f'The API key for {service} has expired or is inactive.\n\n'
+                f'Please enter a new valid key.\n\n'
+                f'The current job will pause and not continue until a new key is entered.\n\n'
+                f'Error: {error_msg}\n\n'
+                f'Get a new key at:\n{url}\n\n'
+                f'Enter your new {service} API key:'
+            )
+
+            if not new_value or _is_placeholder(new_value):
+                # User dismissed the dialog without entering a key
+                skip = _prompt_yesno(
+                    f'Plex Metadata Generator — Skip {service}?',
+                    f'No new key was entered for {service}.\n\n'
+                    f'The job will continue but {spec["used_for"]} will be unavailable.\n\n'
+                    f'Skip {service} and continue?'
+                )
+                if skip:
+                    logger.warning(f"  {service} skipped — {spec['used_for']} unavailable this run")
+                    state[' '.join(spec['path'])] = {
+                        'valid': False,
+                        'checked_at': datetime.now().isoformat(),
+                    }
+                    break
+                # User said No to skip — loop back to show the key-entry dialog again
+                continue
+
+            # Validate the newly entered key
+            valid2, error2 = _validate_api_key(spec, new_value, config)
+            if valid2:
+                _set_nested(config, spec['path'], new_value)
+                any_changed = True
+                logger.info(f"  ✓ {service} key updated and validated")
+                state[' '.join(spec['path'])] = {
+                    'valid': True,
+                    'checked_at': datetime.now().isoformat(),
+                }
+                break
+            else:
+                # Still invalid — ask whether to try again or skip
+                try_again = _prompt_yesno(
+                    f'Plex Metadata Generator — {service} Key Still Invalid',
+                    f'The new key entered for {service} is also invalid:\n\n'
+                    f'{error2}\n\n'
+                    f'Please verify the key at:\n{url}\n\n'
+                    f'Try entering the key again? (No = skip {service} for this run)'
+                )
+                if not try_again:
+                    logger.warning(f"  {service} skipped after repeated invalid key")
+                    state[' '.join(spec['path'])] = {
+                        'valid': False,
+                        'checked_at': datetime.now().isoformat(),
+                    }
+                    break
+
+    state['last_validated'] = datetime.now().isoformat()
+    _save_validation_state(cache_dir, state)
+
+    if any_changed:
+        save = _prompt_yesno(
+            'Plex Metadata Generator — Save Updated Keys',
+            f'One or more API keys were updated during validation.\n\n'
+            f'Save changes to config file?\n\n{config_path}'
+        )
+        if save:
+            try:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2)
+                logger.info(f"  ✓ Config saved with updated keys: {config_path}")
+            except IOError as e:
+                logger.error(f"  Failed to save config: {e}")
 
     return config
 
@@ -2115,11 +2417,18 @@ if __name__ == '__main__':
         logging.getLogger().setLevel(logging.DEBUG)
 
     config = load_config(args.config)
+    cache_dir = config.get('cache_dir', '/var/cache/plex-metadata')
+
     if not args.no_prompts:
         config = prompt_missing_library_paths(config, args.config)
         config = prompt_missing_api_keys(config, args.config)
         if not args.force:
             args.force = prompt_force_flag()
+
+    # 15-day scheduled revalidation — runs in both interactive and --no-prompts modes.
+    # Shows blocking dialogs if a key has expired, regardless of --no-prompts.
+    config = revalidate_all_keys(config, args.config, cache_dir)
+
     orchestrator = PlexMetadataOrchestrator(config, force=args.force)
 
     specific = args.show or args.movie

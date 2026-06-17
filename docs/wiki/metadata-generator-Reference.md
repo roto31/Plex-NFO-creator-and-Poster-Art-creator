@@ -56,7 +56,7 @@ All selected paths are written to the config as a list (`movies_library_roots`, 
 
 ### 2 — API keys
 
-For each service whose key is missing or contains a placeholder value, a dialog shows the service name, what it's used for, where to get a free key, and a text field to enter it. Required keys (TMDB, TVDB) show a warning if skipped; optional keys (FanArt.tv, Plex token, OpenSubtitles) are silently skipped.
+For each service whose key is missing or contains a placeholder value, a dialog shows the service name, what it's used for, where to get a free key, and a text field to enter it. After you enter a key it is **validated against the live API** before being accepted — if the key is rejected, an error dialog explains what went wrong and offers to retry. Required keys (TMDB, TVDB) show a warning if skipped; optional keys (FanArt.tv, Plex token, OpenSubtitles) are silently skipped.
 
 ### 3 — Scan mode
 
@@ -72,9 +72,23 @@ Choosing **Yes** is equivalent to passing `--force` on the command line.
 
 After each dialog group (paths, keys) a **Save?** dialog offers to write the answers back to the config file so you are never prompted again for that information.
 
+### 15-day API key revalidation
+
+Every 15 days (tracked in `{cache_dir}/key_validation_state.json`) the script tests all configured API keys against their respective live APIs. This check runs in **both interactive and scheduled (`--no-prompts`) modes** — because an expired key means the scheduled job cannot do useful work.
+
+If a key has expired or been deactivated, a blocking dialog appears with the message:
+
+> *"The API key for [service] has expired or is inactive. Please enter a new valid key. The current job will pause and not continue until a new key is entered."*
+
+The new key is validated before being accepted. If the new key also fails, the user is asked whether to try again or skip that service for this run. If skipped, processing continues for all other services; the affected service's functionality (metadata lookup, artwork, subtitles) is unavailable until the key is updated.
+
+The validation timestamp is written after each full check. The next check is due 15 days later.
+
 ### Suppressing dialogs for scheduled runs
 
-All dialogs are bypassed when `--no-prompts` is passed. Every scheduling artifact (LaunchAgent, systemd service, cron, Windows Task Scheduler) includes this flag automatically.
+Initial setup dialogs (paths, missing keys, force flag) are bypassed when `--no-prompts` is passed. Every scheduling artifact (LaunchAgent, systemd service, cron, Windows Task Scheduler) includes this flag automatically.
+
+**Exception:** the expired-key blocking dialog always appears when a key fails the 15-day revalidation check, regardless of `--no-prompts`. A scheduled job with an expired key would silently produce no output — the dialog ensures the problem is surfaced and fixed before the run continues.
 
 ---
 

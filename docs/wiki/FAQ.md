@@ -278,6 +278,14 @@ You can also edit the config directly:
 
 ---
 
+**Q: How does the script verify my API keys?**
+
+A: When you enter a key in a setup dialog, it is immediately tested against the live API before being saved. If the key is rejected, an error dialog explains the reason (invalid key, expired, quota exceeded, etc.) and offers to let you try again. You can retry as many times as needed or skip to continue without that service.
+
+For already-configured keys, the script runs a full validation check every 15 days. If a key has expired since the last check, a **blocking dialog** appears — the job pauses until you enter a valid replacement key. This applies even in unattended/scheduled mode, because a job with an invalid key would silently produce no output.
+
+---
+
 **Q: What does "Force a full rescan" mean?**
 
 A: The force-scan dialog (shown at the end of first-run setup) is equivalent to passing `--force` on the command line. Choosing **Yes** causes the script to process every item — even those that already have NFO files and artwork. Choosing **No** (the default for ongoing use) skips anything already complete.
