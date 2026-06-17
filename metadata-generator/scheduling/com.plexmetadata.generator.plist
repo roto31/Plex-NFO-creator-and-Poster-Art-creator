@@ -27,6 +27,7 @@
     <string>/usr/local/etc/plex-metadata-generator.conf</string>
     <string>--media-type</string>
     <string>all</string>
+    <string>--no-prompts</string>
   </array>
 
   <!-- Run daily at 2:00 AM -->

@@ -249,4 +249,126 @@ This can happen with older TV files or files processed by tools other than iTune
 
 A: Yes. Simply download the poster from TMDB or TVDB and save it as `poster.jpg` in the movie or show folder, overwriting the extracted image. Plex will use whichever `poster.jpg` is present.
 
-The scripts do not download posters from the API — they only extract embedded artwork. Adding API-based poster downloads is a possible future enhancement.
+The core scripts (`extract_artwork.py`) only extract embedded MP4 artwork. The **Metadata Generator** downloads official posters from TMDB/TVDB automatically — see the [Metadata Generator Reference](metadata-generator-Reference).
+
+---
+
+## Metadata Generator Setup
+
+**Q: Do I need to edit the config file before running?**
+
+A: No. On first run, the script shows a series of native OS dialogs that walk you through setup:
+1. **Library paths** — a folder browser for Movies, TV Shows, and Music (with Add/Done to add multiple volumes)
+2. **API keys** — a text-input dialog for each service whose key is missing
+3. **Scan mode** — Yes/No dialog asking whether to process everything or only new items
+4. **Save** — offers to write your answers back to the config file so you are never prompted again
+
+All dialogs are bypassed by passing `--no-prompts` (used automatically by the scheduling installers).
+
+---
+
+**Q: I have movies on two different drives. How do I add both?**
+
+A: During the first-run setup dialog for Movies, click **Yes** when asked "Add another volume?" and select your second drive. You can add as many volumes as you have. All paths are saved to `movies_library_roots` in the config as a list and scanned on every run.
+
+You can also edit the config directly:
+```json
+"movies_library_roots": ["/Volumes/Drive1/Movies", "/Volumes/NAS/Movies"]
+```
+
+---
+
+**Q: How does the script verify my API keys?**
+
+A: When you enter a key in a setup dialog, it is immediately tested against the live API before being saved. If the key is rejected, an error dialog explains the reason (invalid key, expired, quota exceeded, etc.) and offers to let you try again. You can retry as many times as needed or skip to continue without that service.
+
+For already-configured keys, the script runs a full validation check every 15 days. If a key has expired since the last check, a **blocking dialog** appears — the job pauses until you enter a valid replacement key. This applies even in unattended/scheduled mode, because a job with an invalid key would silently produce no output.
+
+---
+
+**Q: What does "Force a full rescan" mean?**
+
+A: The force-scan dialog (shown at the end of first-run setup) is equivalent to passing `--force` on the command line. Choosing **Yes** causes the script to process every item — even those that already have NFO files and artwork. Choosing **No** (the default for ongoing use) skips anything already complete.
+
+---
+
+## Metadata Generator
+
+**Q: Does the Metadata Generator replace `scraper.py`?**
+
+A: No. They serve different purposes:
+- `scraper.py` is for **initial, on-demand batch processing** — run it once to generate NFOs for your entire library
+- The Metadata Generator is for **ongoing automated updates** — it runs daily and only processes items that are new or missing files
+
+Use `scraper.py` first to bootstrap your library, then add the Metadata Generator to keep it current.
+
+---
+
+**Q: Can I run movies only with the Metadata Generator?**
+
+A: Yes: `python3 plex_metadata_generator.py --media-type movies`
+
+---
+
+**Q: Will the Metadata Generator overwrite files it already generated?**
+
+A: No. Selective processing checks every NFO file and every artwork file individually before any API call. If an item already has both its NFO and all expected artwork files, it is logged as `⏭ already complete` and skipped entirely.
+
+Use `--force` to override this behavior and regenerate everything.
+
+---
+
+**Q: What is the difference between `plex_metadata_generator.py` and `plex_metadata_generator_extended.py`?**
+
+A: Both handle TV shows and Movies. The extended script additionally supports Music libraries (Spotify + MusicBrainz for artist, album, and track metadata). If you don't have a music library in Plex, use the standard script.
+
+---
+
+**Q: Do I need a FanArt.tv API key?**
+
+A: It is optional but highly recommended. Without it, `clearart.png`, `disc.png`, and `logo.png` are skipped (a warning is logged). `poster.jpg`, `folder.jpg`, and `backdrop.jpg` still download from TMDB. FanArt.tv personal API keys are free at [fanart.tv/get-an-api-key](https://fanart.tv/get-an-api-key/).
+
+---
+
+**Q: How does the Metadata Generator's artwork download differ from `extract_artwork.py`?**
+
+A: They are complementary, not redundant:
+
+| | `extract_artwork.py` | Metadata Generator |
+|--|---------------------|--------------------|
+| Source | Embedded MP4 artwork stream | TMDB + FanArt.tv + TVDB APIs |
+| Files written | `poster.jpg` (movie, show, season), `-thumb.jpg` (episode) | Full set: `poster.jpg`, `folder.jpg`, `backdrop.jpg`, `clearart.png`, `disc.png`, `logo.png` |
+| Requires internet | No | Yes |
+| Requires ffmpeg | Yes | No |
+| When to use | iTunes/Subler-encoded files with embedded art | Any file — API-sourced art regardless of what's embedded |
+
+If you have iTunes-purchased files, run both. If your files have no embedded artwork, skip `extract_artwork.py` and use the Metadata Generator directly.
+
+---
+
+**Q: Do I need both the sidecar `.srt` and the embedded subtitle track?**
+
+A: Yes — they serve different players:
+
+| Format | Read by |
+|--------|--------|
+| `{stem}.{lang}.srt` | Plex (Local Media Assets picks it up automatically) |
+| Embedded `mov_text` track | Apple TV local media playback |
+
+Plex does not read embedded subtitle tracks from MP4 files. Apple TV's local player does not read sidecar `.srt` files. You need both for full coverage.
+
+---
+
+**Q: What is the OpenSubtitles download limit?**
+
+A: By default (API key only, no account credentials): **5 downloads/day**. With a free OpenSubtitles account and credentials in the config: **40 downloads/day** per API key. Subdl is used as a fallback if OpenSubtitles is exhausted or unavailable, with no account required.
+
+API key registration is free at [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) — no credit card.
+
+---
+
+**Q: Will subtitle embedding modify my video files?**
+
+A: Yes. When `embed_in_file: true`, ffmpeg writes the subtitle track into the MP4/M4V file. The process is atomic — ffmpeg writes to a temp file first, then replaces the original only after a size sanity check passes. The disk space required during the operation is equal to the file size (temp + original exist simultaneously until the replace).
+
+MKV files are never modified — sidecar-only is used automatically for `.mkv`.

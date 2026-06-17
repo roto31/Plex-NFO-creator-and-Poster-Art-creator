@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 class MediaType(Enum):
     """Supported media types"""
     TV_SHOW = "tv_show"
+    MOVIE = "movie"
     MUSIC_ALBUM = "music_album"
     MUSIC_ARTIST = "music_artist"
     MUSIC_TRACK = "music_track"
@@ -810,10 +811,10 @@ class PlexMetadataOrchestrator:
     def run(self, media_type: str = 'all', specific_item: str = None):
         """
         Main execution method
-        
+
         Args:
-            media_type: 'tv', 'music', or 'all'
-            specific_item: Process only a specific show/artist if provided
+            media_type: 'tv', 'movies', 'music', or 'all'
+            specific_item: Process only a specific show/artist/movie if provided
         """
         try:
             if media_type in ('tv', 'all'):
@@ -822,12 +823,19 @@ class PlexMetadataOrchestrator:
                     self.process_tv_library()
                     self.tunarr.disconnect()
                 self.refresh_plex_library(self.tv_library_key)
-            
+
+            if media_type in ('movies', 'all'):
+                logger.info("Starting movie metadata generation")
+                # Delegate to base script's process_movie_library
+                from plex_metadata_generator import PlexMetadataOrchestrator as BaseOrchestrator
+                base = BaseOrchestrator(self.config, force=self.force)
+                base.process_movie_library(specific_movie=specific_item)
+
             if media_type in ('music', 'all'):
                 logger.info("Starting music metadata generation")
                 self.process_music_library()
                 self.refresh_plex_library(self.music_library_key)
-            
+
             logger.info("Metadata generation complete")
         except Exception as e:
             logger.error(f"Fatal error during metadata generation: {e}", exc_info=True)
@@ -863,24 +871,30 @@ if __name__ == '__main__':
     parser.add_argument(
         '--media-type',
         default='all',
-        choices=['tv', 'music', 'all'],
-        help='Which media type to process'
+        choices=['tv', 'movies', 'music', 'all'],
+        help='Which media type to process (default: all)'
     )
     parser.add_argument(
         '--item',
-        help='Process only a specific show or artist'
+        help='Process only a specific show, movie, or artist'
+    )
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Overwrite existing NFO files and artwork'
     )
     parser.add_argument(
         '--debug',
         action='store_true',
         help='Enable debug logging'
     )
-    
+
     args = parser.parse_args()
-    
+
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
     config = load_config(args.config)
     orchestrator = PlexMetadataOrchestrator(config)
+    orchestrator.force = getattr(args, 'force', False)
     orchestrator.run(args.media_type, args.item)

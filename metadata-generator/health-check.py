@@ -35,12 +35,26 @@ class HealthChecker:
             with open(self.config_path) as f:
                 config = json.load(f)
             
-            required_keys = ['library_root', 'plex', 'tvdb', 'tmdb']
+            # Accept either old flat 'library_root' or new split keys
+            has_library = (
+                'library_root' in config
+                or 'tv_library_root' in config
+                or 'movies_library_root' in config
+            )
+            required_keys = ['plex', 'tvdb', 'tmdb']
             missing = [k for k in required_keys if k not in config]
-            
+            if not has_library:
+                missing.append('tv_library_root (or library_root)')
+
             if missing:
                 print(f"  ⚠️  Missing config keys: {missing}")
                 return False
+
+            # Warn (not error) if FanArt.tv key absent — clearart/disc/logo will be skipped
+            if not config.get('fanart_tv', {}).get('api_key'):
+                print("  ⚠️  fanart_tv.api_key not set — clearart, disc, and logo artwork will be skipped")
+            else:
+                print("  ✅ FanArt.tv key configured")
             
             # Check for placeholder values
             if 'YOUR_' in json.dumps(config):
@@ -208,6 +222,7 @@ class HealthChecker:
             'tunarr': False,
             'tvdb': False,
             'tmdb': False,
+            'fanart_tv': False,
             'plex': False,
         }
         
@@ -266,6 +281,24 @@ class HealthChecker:
         except Exception as e:
             print(f"  ❌ TMDb check failed: {e}")
         
+        # Test FanArt.tv
+        try:
+            fanart_key = config.get('fanart_tv', {}).get('api_key')
+            if fanart_key and 'YOUR_' not in fanart_key:
+                r = requests.get(
+                    f'https://webservice.fanart.tv/v3/movies/550?api_key={fanart_key}',
+                    timeout=5
+                )
+                if r.status_code == 200:
+                    result['fanart_tv'] = True
+                    print(f"  ✅ FanArt.tv API accessible")
+                else:
+                    print(f"  ❌ FanArt.tv API returned {r.status_code}")
+            else:
+                print(f"  ⚠️  FanArt.tv API key not configured (clearart/disc/logo will be skipped)")
+        except Exception as e:
+            print(f"  ❌ FanArt.tv check failed: {e}")
+
         # Test Plex
         try:
             plex_url = config.get('plex', {}).get('url', 'http://localhost:32400')
@@ -285,19 +318,62 @@ class HealthChecker:
                 print(f"  ⚠️  Plex token not configured")
         except Exception as e:
             print(f"  ❌ Plex check failed: {e}")
-        
+
+        # Test OpenSubtitles (if configured)
+        try:
+            sub_cfg = config.get('subtitles', {})
+            if sub_cfg.get('enabled'):
+                os_key = sub_cfg.get('opensubtitles', {}).get('api_key', '')
+                sd_key = sub_cfg.get('subdl', {})
+                if os_key and 'YOUR_' not in os_key:
+                    r = requests.get(
+                        'https://api.opensubtitles.com/api/v1/infos/user',
+                        headers={'Api-Key': os_key},
+                        timeout=5
+                    )
+                    if r.status_code in (200, 401):  # 401 = valid key, just not logged in
+                        result['opensubtitles'] = True
+                        print(f"  ✅ OpenSubtitles API reachable")
+                    else:
+                        print(f"  ❌ OpenSubtitles API returned {r.status_code}")
+                elif not os_key and not sd_key:
+                    print(f"  ⚠️  subtitles.enabled=true but no provider keys configured")
+                else:
+                    print(f"  ⚠️  OpenSubtitles API key not configured — Subdl only")
+
+                # Check ffmpeg availability for embedding
+                import shutil as _shutil
+                if sub_cfg.get('embed_in_file', True):
+                    if _shutil.which('ffmpeg'):
+                        print(f"  ✅ ffmpeg found (subtitle embedding available)")
+                    else:
+                        print(f"  ⚠️  ffmpeg not found — subtitle embedding disabled, sidecar only")
+            else:
+                print(f"  ℹ️  Subtitles disabled (subtitles.enabled=false)")
+        except Exception as e:
+            print(f"  ❌ Subtitle check failed: {e}")
+
         return result
     
     def check_permissions(self) -> bool:
         """Check file permissions"""
         print("[*] Checking permissions...")
-        
+
         paths = [
-            '/mnt/media/TV',
             '/var/cache/plex-metadata',
             '/var/log/plex-metadata-generator',
             '/etc/plex-metadata-generator.conf',
         ]
+
+        # Add library roots from config if available
+        try:
+            config = json.load(open(self.config_path))
+            for key in ('library_root', 'tv_library_root', 'movies_library_root', 'music_library_root'):
+                v = config.get(key)
+                if v:
+                    paths.append(v)
+        except Exception:
+            paths.append('/mnt/media/TV')
         
         all_ok = True
         for path in paths:

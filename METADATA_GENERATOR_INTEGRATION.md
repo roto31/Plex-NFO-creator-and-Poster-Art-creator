@@ -11,9 +11,12 @@ This repository includes a second, complementary tool: the **Plex Metadata Gener
 | **Purpose** | One-time / on-demand batch processing | Automated daily updates |
 | **Trigger** | Manual (`python3 scraper.py ...`) | Scheduled (cron / systemd / Docker) |
 | **TV Shows** | ✅ Full NFO + episode metadata | ✅ Full NFO + episode metadata |
-| **Movies** | ✅ Full NFO | ❌ TV only |
-| **Music** | ❌ | ✅ Spotify + MusicBrainz |
-| **Artwork extraction** | ✅ Embedded MP4 art → poster.jpg | ✅ Downloads posters from APIs |
+| **Movies** | ✅ Full NFO | ✅ TMDB NFO + full artwork set |
+| **Music** | ❌ | ✅ Spotify + MusicBrainz (extended script) |
+| **Artwork extraction** | ✅ Embedded MP4 art → `poster.jpg` | ✅ Downloads full set from TMDB + FanArt.tv + TVDB |
+| **Artwork files (movies)** | `poster.jpg` only | `poster.jpg` + `folder.jpg` + `backdrop.jpg` + `clearart.png` + `disc.png` + `logo.png` |
+| **Artwork files (TV shows)** | `poster.jpg` only | `poster.jpg` + `banner.jpg` + `fanart.jpg` + `clearart.png` + `logo.png` + `landscape.jpg` |
+| **Selective processing** | Skip if NFO exists (without `--force`) | Skip if NFO + all artwork present — zero API calls per complete item |
 | **Plex refresh** | ❌ Manual | ✅ Automatic after each run |
 | **Tunarr integration** | ❌ | ✅ |
 | **Scheduling** | ❌ | ✅ systemd / cron / macOS LaunchAgent / Docker |

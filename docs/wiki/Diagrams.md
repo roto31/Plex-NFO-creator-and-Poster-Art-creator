@@ -458,3 +458,187 @@ flowchart TD
     L --> M[Wait 10–30 min\nfor Plex to re-index]
     M --> N([Metadata & artwork\nnow showing in Plex])
 ```
+
+---
+
+## Diagram 18 — Metadata Generator: System Architecture
+
+```mermaid
+flowchart TD
+  subgraph APIs
+    TVDB[TheTVDB v4]
+    TMDB[TMDB v3]
+    FANART[FanArt.tv v3]
+    Tunarr[Tunarr SQLite]
+    Spotify[Spotify API]
+    MB[MusicBrainz API]
+  end
+  subgraph Generator
+    TV[process_tv_library]
+    MOV[process_movie_library]
+    MUS[process_music_library\nextended only]
+  end
+  subgraph Skip["Selective Processing"]
+    CHECK{NFO exists?\nAll art exists?}
+    SKIP[⏭ Skip — already complete]
+    RUN[Fetch metadata\nWrite NFO\nDownload missing art]
+  end
+  TVDB & TMDB & Tunarr --> TV
+  FANART -- clearart/logo/landscape --> TV
+  TMDB --> MOV
+  FANART -- clearart/disc/logo\nposter fallback --> MOV
+  Spotify & MB --> MUS
+  TV & MOV & MUS --> CHECK
+  CHECK -- All present --> SKIP
+  CHECK -- Missing NFO or art --> RUN
+  RUN --> NFO[NFO files]
+  RUN --> ART["poster.jpg · folder.jpg\nbackdrop.jpg · clearart.png\ndisc.png · logo.png"]
+  NFO & ART --> Plex[Plex Local Media Assets]
+```
+
+---
+
+## Diagram 19 — Metadata Generator: Movie Processing Flow
+
+```mermaid
+flowchart TD
+  A([Scan movies_library_root]) --> B[For each folder]
+  B --> C{is_multipart?}
+  C -- Yes --> D[⏭ Skip — multi-part]
+  C -- No --> E[_needs_movie_artwork\ncheck all 6 files]
+  E --> F{Movie.nfo missing\nOR any art missing?}
+  F -- Neither --> G[⏭ Skip — already complete]
+  F -- Yes --> H{Movie.nfo exists?}
+  H -- Yes --> I[Parse existing NFO\n_extract_tmdb_id_from_nfo\nno search API call]
+  H -- No --> J[Extract year from folder name]
+  J --> K[TMDbMovieProvider\nsearch_movie title + year]
+  K --> L{Found?}
+  L -- No with year --> M[Retry without year]
+  M --> L
+  L -- No --> N[❌ Not found — log error]
+  I & L -- Yes --> O[get_movie details\ncredits + external_ids]
+  O --> P{NFO needed?}
+  P -- Yes --> Q[generate_movie_nfo → Movie.nfo]
+  P -- No --> R
+  Q --> R{poster or\nbackdrop needed?}
+  R -- Yes --> S[Download TMDB\nposter + backdrop\ncopy → folder.jpg]
+  S --> T
+  R -- No --> T{clearart / disc /\nlogo needed?}
+  T -- Yes --> U[FanartTvProvider\nget_movie_artwork]
+  U --> V[Download only\nmissing FanArt.tv files\nclearart / disc / logo]
+  V --> B
+  T -- No --> B
+  G & N --> B
+  B --> W[refresh_plex_library\nmovies_library_key]
+```
+
+---
+
+## Diagram 20 — Metadata Generator: TV Show Processing Flow
+
+```mermaid
+flowchart TD
+  A([Scan tv_library_root]) --> B[For each show folder]
+  B --> C{tvshow.nfo missing\nOR show art missing?}
+  C -- Nothing missing --> D[Skip show-level — check seasons]
+  C -- Missing --> E[_find_show_metadata]
+  E --> F{TVDb found?}
+  F -- No --> G[TMDb fallback]
+  G --> H{TMDb found?}
+  H -- No --> I[Tunarr fallback]
+  I --> J{Found?}
+  J -- No --> K[❌ Not found]
+  F -- Yes --> L[get_show details\nartworks incl. banner + fanart]
+  H -- Yes --> L
+  J -- Yes --> L
+  L --> M[generate_show_nfo → tvshow.nfo]
+  M --> N[Download TVDB poster\nbanner + fanart]
+  N --> O{clearart / logo /\nlandscape needed?}
+  O -- Yes --> P[FanartTvProvider\nget_tv_artwork tvdb_id]
+  P --> Q[Download missing\nFanArt.tv files]
+  Q --> D
+  O -- No --> D
+  D --> R[For each Season dir]
+  R --> S{season.nfo missing\nor poster.jpg missing?}
+  S -- Neither --> T[Skip — check episodes]
+  S -- Missing --> U[Write season.nfo\nDownload season poster from TVDB]
+  U --> T
+  T --> V[For each episode video]
+  V --> W{episode.nfo missing\nor thumb missing?}
+  W -- Neither --> X[⏭ Skip episode]
+  W -- Missing --> Y[TVDb/TMDb get_episodes]
+  Y --> Z[generate_episode_nfo\nDownload episode thumb]
+  Z & X --> V
+```
+
+---
+
+## Diagram 21 — Metadata Generator: Music Processing Flow
+
+```mermaid
+flowchart TD
+  A([Scan music_library_root]) --> B[For each Artist dir]
+  B --> C{artist.nfo missing\nor artist.jpg missing?}
+  C -- Neither --> D[Skip artist-level — check albums]
+  C -- Missing --> E[SpotifyProvider.search_artist]
+  E --> F{Found?}
+  F -- No --> G[MusicBrainzProvider fallback]
+  G --> H{Found?}
+  H -- No --> I[⚠ No artist metadata]
+  F -- Yes --> J[generate_artist_nfo\nDownload artist.jpg]
+  H -- Yes --> J
+  J --> D
+  D --> K[For each Album dir]
+  K --> L{album.nfo missing\nor cover.jpg missing?}
+  L -- Neither --> M[Skip album-level — check tracks]
+  L -- Missing --> N[SpotifyProvider.search_album]
+  N --> O{Found?}
+  O -- No --> P[MusicBrainz fallback]
+  O -- Yes --> Q[generate_album_nfo\nDownload cover.jpg]
+  P --> Q
+  Q --> M
+  M --> R[For each audio track]
+  R --> S{track.nfo missing?}
+  S -- No --> T[⏭ Skip track]
+  S -- Yes --> U[generate_track_nfo\nMBID + ISRC from album]
+  U & T --> R
+```
+
+---
+
+## Diagram 22 — Metadata Generator: --media-type Decision Flow
+
+```mermaid
+flowchart TD
+  A([Script launched]) --> B[Parse --media-type]
+  B --> C{Value?}
+  C -- tv --> D[process_tv_library\nTVDB + TMDB + FanArt.tv + Tunarr]
+  C -- movies --> E[process_movie_library\nTMDB + FanArt.tv]
+  C -- music --> F[process_music_library\nSpotify + MusicBrainz\nextended script only]
+  C -- all --> G[Run all applicable\nbased on config keys present]
+  G --> D & E & H{Extended\nscript?}
+  H -- Yes --> F
+  H -- No --> I[Skip music]
+  D --> J[refresh_plex tv_library_key]
+  E --> K[refresh_plex movies_library_key]
+  F --> L[refresh_plex music_library_key]
+```
+
+---
+
+## Diagram 23 — Metadata Generator: Scheduling Architecture
+
+```mermaid
+flowchart TD
+  A([Daily trigger]) --> B{Platform?}
+  B -- macOS --> C[LaunchAgent\ncom.plexmetadata.generator.plist\ninstall-macos.sh]
+  B -- Linux --> D[systemd timer\nplex-metadata-generator.timer\ninstall-linux.sh]
+  B -- Windows --> E[Task Scheduler XML\nplex-metadata-generator-windows.xml\ninstall-windows.ps1]
+  B -- Any --> F[Cron\nplex-metadata-generator-cron]
+  B -- Docker --> G[docker-compose.yml\nCronJob in container]
+  C & D & E & F & G --> H[plex_metadata_generator.py\n--media-type all]
+  H --> I{Selective check\nper item}
+  I -- NFO + all art present --> J[⏭ Skip — zero API calls]
+  I -- Missing NFO or art --> K[Fetch only what is needed\nWrite NFO + download art]
+  K --> L[Plex API refresh]
+```
