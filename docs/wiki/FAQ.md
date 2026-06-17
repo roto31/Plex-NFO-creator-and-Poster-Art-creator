@@ -320,7 +320,7 @@ Use `--force` to override this behavior and regenerate everything.
 
 **Q: What is the difference between `plex_metadata_generator.py` and `plex_metadata_generator_extended.py`?**
 
-A: Both handle TV shows and Movies. The extended script additionally supports Music libraries (Spotify + MusicBrainz for artist, album, and track metadata). If you don't have a music library in Plex, use the standard script.
+A: Both handle TV shows and Movies. The extended script additionally supports Music libraries (iTunes Search API + Apple MusicKit + MusicBrainz for artist, album, and track metadata). iTunes Search API requires no credentials and works out of the box. Apple MusicKit (optional, requires an Apple Developer account) adds higher-resolution artwork. MusicBrainz provides a local-DB fallback. If you don't have a music library in Plex, use the standard script.
 
 ---
 

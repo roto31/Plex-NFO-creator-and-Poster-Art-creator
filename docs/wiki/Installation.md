@@ -241,7 +241,7 @@ In addition to the core TMDB + TVDB keys, the Metadata Generator uses:
 | TVDB | TV show + episode metadata | [thetvdb.com/api-information](https://thetvdb.com/api-information) |
 | FanArt.tv | clearart, disc, logo artwork | [fanart.tv/get-an-api-key](https://fanart.tv/get-an-api-key/) — free personal key |
 | Plex token | Library auto-refresh | View page source at `http://localhost:32400/web/`, search `authenticationToken` |
-| Spotify (extended only) | Music metadata | [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) |
+| Apple MusicKit (extended, optional) | Higher-res music artwork + richer artist metadata | [developer.apple.com](https://developer.apple.com) — requires paid Apple Developer account ($99/yr); iTunes Search API is always active with no key required |
 
 ### 2. Configure
 

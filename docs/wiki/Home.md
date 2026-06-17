@@ -104,7 +104,7 @@ A complementary, scheduled automation layer that runs daily to pick up newly add
 
 Two scripts are available:
 - `metadata-generator/plex_metadata_generator.py` — TV shows + Movies
-- `metadata-generator/plex_metadata_generator_extended.py` — TV shows + Movies + Music (Spotify + MusicBrainz)
+- `metadata-generator/plex_metadata_generator_extended.py` — TV shows + Movies + Music (iTunes Search API + Apple MusicKit + MusicBrainz)
 
 See the [Metadata Generator Reference](metadata-generator-Reference) for full documentation.
 

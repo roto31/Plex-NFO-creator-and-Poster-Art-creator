@@ -12,7 +12,7 @@ This repository includes a second, complementary tool: the **Plex Metadata Gener
 | **Trigger** | Manual (`python3 scraper.py ...`) | Scheduled (cron / systemd / Docker) |
 | **TV Shows** | ✅ Full NFO + episode metadata | ✅ Full NFO + episode metadata |
 | **Movies** | ✅ Full NFO | ✅ TMDB NFO + full artwork set |
-| **Music** | ❌ | ✅ Spotify + MusicBrainz (extended script) |
+| **Music** | ❌ | ✅ iTunes Search API + Apple MusicKit + MusicBrainz (extended script) |
 | **Artwork extraction** | ✅ Embedded MP4 art → `poster.jpg` | ✅ Downloads full set from TMDB + FanArt.tv + TVDB |
 | **Artwork files (movies)** | `poster.jpg` only | `poster.jpg` + `folder.jpg` + `backdrop.jpg` + `clearart.png` + `disc.png` + `logo.png` |
 | **Artwork files (TV shows)** | `poster.jpg` only | `poster.jpg` + `banner.jpg` + `fanart.jpg` + `clearart.png` + `logo.png` + `landscape.jpg` |

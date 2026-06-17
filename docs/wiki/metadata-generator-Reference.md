@@ -9,7 +9,7 @@ The Plex Metadata Generator is a scheduled automation layer that complements the
 | Script | Media types | Extra providers |
 |--------|-------------|----------------|
 | [`plex_metadata_generator.py`](../../metadata-generator/plex_metadata_generator.py) | TV shows + Movies | TVDB, TMDB, FanArt.tv, Tunarr |
-| [`plex_metadata_generator_extended.py`](../../metadata-generator/plex_metadata_generator_extended.py) | TV shows + Movies + Music | + Spotify, MusicBrainz |
+| [`plex_metadata_generator_extended.py`](../../metadata-generator/plex_metadata_generator_extended.py) | TV shows + Movies + Music | + iTunes Search API, Apple MusicKit (optional), MusicBrainz |
 
 Both scripts write the **identical NFO format** as `scraper.py` — they are fully interchangeable and produce no conflicts.
 
@@ -83,6 +83,30 @@ If a key has expired or been deactivated, a blocking dialog appears with the mes
 The new key is validated before being accepted. If the new key also fails, the user is asked whether to try again or skip that service for this run. If skipped, processing continues for all other services; the affected service's functionality (metadata lookup, artwork, subtitles) is unavailable until the key is updated.
 
 The validation timestamp is written after each full check. The next check is due 15 days later.
+
+### Apple MusicKit Setup (optional)
+
+On first run with a music library configured, the script displays a native macOS dialog offering to set up Apple MusicKit:
+
+```
+╔══════════════════════════════════════════════════════════╗
+║       Apple MusicKit API  (optional enhancement)        ║
+╠══════════════════════════════════════════════════════════╣
+║  The free iTunes Search API is already active.          ║
+║  MusicKit (requires Apple Developer account, $99/yr)    ║
+║  adds higher-resolution artwork and richer metadata.    ║
+╚══════════════════════════════════════════════════════════╝
+```
+
+If you click **Yes**, a form appears collecting:
+- **Team ID** — 10-character string from [developer.apple.com/account](https://developer.apple.com/account) → Membership
+- **Key ID** — from Keys section in developer portal (create a MusicKit key)
+- **Private key file** — the `.p8` file downloaded when you created the key
+- **Storefront** — iTunes Store country code (default: `us`)
+
+The script validates the credentials by making a live MusicKit API call before saving. Tokens are generated locally using ES256 JWT signing (6-month validity per Apple's maximum). The `cryptography` pip package is required for token generation (`pip3 install cryptography`).
+
+If you decline or don't have an Apple Developer account, the iTunes Search API continues to run automatically with no configuration required — it provides album art at 3000×3000 resolution and full album/artist metadata with zero auth.
 
 ### Suppressing dialogs for scheduled runs
 
@@ -177,9 +201,13 @@ The plural keys (`*_library_roots`) take priority over the singular keys (`*_lib
   "music_library_root": "/mnt/media/Music",
   "plex": { "music_library_key": "3" },
   "musicbrainz": { "contact": "your@email.com" },
-  "spotify": {
-    "client_id": "YOUR_SPOTIFY_CLIENT_ID",
-    "client_secret": "YOUR_SPOTIFY_CLIENT_SECRET"
+  "apple_musickit": {
+    "enabled": false,
+    "team_id": "YOUR_APPLE_TEAM_ID",
+    "key_id": "YOUR_MUSICKIT_KEY_ID",
+    "private_key_path": "/path/to/AuthKey_KEYID.p8",
+    "storefront": "us",
+    "skip": false
   }
 }
 ```
@@ -229,10 +257,10 @@ The plural keys (`*_library_roots`) take priority over the singular keys (`*_lib
 /Music/
 ├── Pink Floyd/
 │   ├── artist.nfo          ← generated
-│   ├── artist.jpg          ← Spotify artist image
+│   ├── artist.jpg          ← Apple MusicKit artist image (if configured) or iTunes artwork
 │   ├── The Dark Side of the Moon/
 │   │   ├── album.nfo
-│   │   ├── cover.jpg       ← Spotify album art
+│   │   ├── cover.jpg       ← iTunes 3000×3000 album art (URL-upscaled)
 │   │   ├── 01 - Speak to Me.flac
 │   │   └── 01 - Speak to Me.nfo
 ```
@@ -335,8 +363,9 @@ Output NFO files use the same XML format as `scraper.py` — they are fully inte
 | **TMDB** (v3) | Movie metadata, movie poster + backdrop | Yes | Yes — [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api) |
 | **FanArt.tv** (v3) | Movie clearart, disc, logo; TV clearart, logo, landscape; poster/backdrop fallback | Yes | Yes — [fanart.tv/get-an-api-key](https://fanart.tv/get-an-api-key/) |
 | **Tunarr** | TV show fallback metadata | No (local DB) | — |
-| **Spotify** | Music artist + album metadata, artwork | Yes | Yes — [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) |
-| **MusicBrainz** | Music fallback metadata | No | Yes |
+| **iTunes Search API** | Music artist + album metadata, album art at 3000×3000 | No | Free — no key required |
+| **Apple MusicKit** | Higher-res artist images, richer music metadata | Yes (`.p8` key + Apple Developer account) | Paid — $99/yr Apple Developer Program |
+| **MusicBrainz** | Music fallback metadata (local PostgreSQL DB or JSON dump) | No | Free |
 | **Plex** | Library refresh after generation | Token | — |
 
 ---
