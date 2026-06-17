@@ -236,8 +236,9 @@ class LocalMusicBrainzProvider:
     """
     Query a locally-hosted MusicBrainz PostgreSQL database.
 
-    Requires the mbdump imported into PostgreSQL per:
-    https://musicbrainz.org/doc/MusicBrainz_Database/Download
+    Requires the mbdump imported into PostgreSQL.
+    Download: https://data.metabrainz.org/pub/musicbrainz/data/fullexport/
+    Schema:   https://musicbrainz.org/doc/MusicBrainz_Database/Schema
 
     Uses psycopg2 (pip install psycopg2-binary).  Falls back gracefully
     to the REST API provider if psycopg2 is not installed or the
@@ -476,6 +477,237 @@ class LocalMusicBrainzProvider:
         except Exception as e:
             logger.debug(f"Local MB get_tracks error: {e}")
             return []
+
+
+class LocalJsonMusicBrainzProvider:
+    """
+    Query MusicBrainz JSON dump files without needing PostgreSQL.
+
+    Download: https://data.metabrainz.org/pub/musicbrainz/data/json-dumps
+    Schema:   https://musicbrainz.org/doc/MusicBrainz_Database/Schema
+
+    Expected directory layout (as extracted from the dump tarballs):
+        <dump_dir>/
+            artist/               ← one .json per artist MBID
+            release/              ← one .json per release MBID
+            release-group/        ← one .json per release-group MBID
+            recording/            ← one .json per recording MBID
+
+    On first use the provider builds lightweight in-memory indexes from the
+    artist and release-group name → MBID mappings so searches are fast.
+    Index build is O(n) over the file count; subsequent lookups are O(1).
+    """
+
+    def __init__(self, dump_dir: str):
+        self.dump_dir = Path(dump_dir)
+        self._artist_index: Dict[str, str] = {}       # lower(name) → mbid
+        self._rg_index: Dict[str, List[str]] = {}     # lower(title) → [mbid, ...]
+        self._indexed = False
+        self._available = False
+
+    # ------------------------------------------------------------------
+    # Setup
+    # ------------------------------------------------------------------
+
+    def connect(self) -> bool:
+        """Verify dump_dir exists and contains expected sub-directories."""
+        if not self.dump_dir.exists():
+            logger.warning(f"MusicBrainz JSON dump directory not found: {self.dump_dir}")
+            return False
+        required = ['artist', 'release-group']
+        missing = [d for d in required if not (self.dump_dir / d).is_dir()]
+        if missing:
+            logger.warning(f"MusicBrainz JSON dump missing sub-dirs: {missing} in {self.dump_dir}")
+            return False
+        self._available = True
+        logger.info(f"MusicBrainz JSON dump found at {self.dump_dir} — building name indexes…")
+        self._build_indexes()
+        return True
+
+    def _build_indexes(self):
+        """Scan artist/ and release-group/ once to build name → MBID maps."""
+        artist_dir = self.dump_dir / 'artist'
+        rg_dir = self.dump_dir / 'release-group'
+
+        count_a = 0
+        for p in artist_dir.glob('*.json'):
+            try:
+                data = json.loads(p.read_text(encoding='utf-8'))
+                name = data.get('name', '')
+                mbid = data.get('id', p.stem)
+                if name:
+                    self._artist_index[name.lower()] = mbid
+                    # Also index sort-name
+                    sn = data.get('sort-name', '')
+                    if sn and sn.lower() != name.lower():
+                        self._artist_index[sn.lower()] = mbid
+                    count_a += 1
+            except Exception:
+                pass
+
+        count_rg = 0
+        for p in rg_dir.glob('*.json'):
+            try:
+                data = json.loads(p.read_text(encoding='utf-8'))
+                title = data.get('title', '')
+                mbid = data.get('id', p.stem)
+                if title:
+                    key = title.lower()
+                    self._rg_index.setdefault(key, []).append(mbid)
+                    count_rg += 1
+            except Exception:
+                pass
+
+        self._indexed = True
+        logger.info(f"  MusicBrainz JSON index: {count_a:,} artists, {count_rg:,} release-groups")
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _read_json(self, subdir: str, mbid: str) -> Optional[dict]:
+        path = self.dump_dir / subdir / f'{mbid}.json'
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding='utf-8'))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _unaccent(s: str) -> str:
+        """Very lightweight accent-stripping (covers common Latin diacritics)."""
+        import unicodedata  # noqa: PLC0415
+        return unicodedata.normalize('NFD', s).encode('ascii', 'ignore').decode('ascii').lower()
+
+    # ------------------------------------------------------------------
+    # Artist search
+    # ------------------------------------------------------------------
+
+    def search_artist(self, artist_name: str) -> List[Dict]:
+        if not self._indexed:
+            return []
+        key = artist_name.lower()
+        ua_key = self._unaccent(artist_name)
+
+        # Exact match
+        mbid = self._artist_index.get(key) or self._artist_index.get(ua_key)
+        if mbid:
+            data = self._read_json('artist', mbid)
+            if data:
+                return [{'id': mbid, 'name': data.get('name', artist_name),
+                          'sort-name': data.get('sort-name', '')}]
+
+        # Prefix / substring fallback (linear scan — only reached on miss)
+        matches = []
+        for name_lower, mid in self._artist_index.items():
+            if key in name_lower or self._unaccent(name_lower).startswith(ua_key[:4]):
+                data = self._read_json('artist', mid)
+                if data:
+                    matches.append({'id': mid, 'name': data.get('name', ''),
+                                    'sort-name': data.get('sort-name', '')})
+                if len(matches) >= 5:
+                    break
+        return matches
+
+    # ------------------------------------------------------------------
+    # Release search
+    # ------------------------------------------------------------------
+
+    def search_release(self, album_title: str, artist: str) -> List[Dict]:
+        """Search release-group index then find a matching release inside it."""
+        if not self._indexed:
+            return []
+        key = album_title.lower()
+        ua_key = self._unaccent(album_title)
+        artist_lower = artist.lower()
+
+        candidates = (self._rg_index.get(key) or
+                      self._rg_index.get(ua_key) or [])
+
+        # Substring fallback
+        if not candidates:
+            for title_lower, mbids in self._rg_index.items():
+                if key in title_lower:
+                    candidates.extend(mbids)
+                if len(candidates) >= 20:
+                    break
+
+        results = []
+        for rg_mbid in candidates[:20]:
+            rg = self._read_json('release-group', rg_mbid)
+            if not rg:
+                continue
+            # Check artist-credit matches
+            ac_names = [ac.get('artist', {}).get('name', '').lower()
+                        for ac in rg.get('artist-credit', [])
+                        if isinstance(ac, dict)]
+            if artist_lower and not any(artist_lower in n for n in ac_names):
+                continue
+            # Return the first release MBID listed in the release-group
+            releases = rg.get('releases', [])
+            if releases:
+                rel_id = releases[0].get('id', rg_mbid)
+                results.append({'id': rel_id, 'title': rg.get('title', album_title),
+                                 'date': rg.get('first-release-date', '')})
+        return results
+
+    # ------------------------------------------------------------------
+    # Full release fetch
+    # ------------------------------------------------------------------
+
+    def get_release(self, mbid: str) -> Optional['AlbumMetadata']:
+        data = self._read_json('release', mbid)
+        if not data:
+            return None
+        artist_credits = data.get('artist-credit', [])
+        artist = ', '.join(
+            ac.get('artist', {}).get('name', '')
+            for ac in artist_credits if isinstance(ac, dict)
+        ) or 'Unknown Artist'
+        date_str = data.get('date', '')
+        year = int(date_str.split('-')[0]) if date_str and date_str[0].isdigit() else 0
+        label = None
+        label_info = data.get('label-info', [])
+        if label_info and isinstance(label_info[0], dict):
+            label = label_info[0].get('label', {}).get('name')
+        media = data.get('media', [])
+        track_count = sum(m.get('track-count', 0) for m in media if isinstance(m, dict))
+        return AlbumMetadata(
+            title=data.get('title', ''),
+            artist=artist,
+            year=year,
+            rating=0.0,
+            mbid=mbid,
+            release_date=date_str,
+            track_count=track_count,
+            label=label,
+        )
+
+    def get_tracks(self, release_mbid: str) -> List[Dict]:
+        data = self._read_json('release', release_mbid)
+        if not data:
+            return []
+        tracks = []
+        for disc_idx, medium in enumerate(data.get('media', []), 1):
+            if not isinstance(medium, dict):
+                continue
+            for track in medium.get('tracks', []):
+                if not isinstance(track, dict):
+                    continue
+                rec = track.get('recording', {})
+                tracks.append({
+                    'disc': disc_idx,
+                    'position': track.get('position', 0),
+                    'title': track.get('title') or rec.get('title', ''),
+                    'length_ms': rec.get('length') or track.get('length'),
+                    'recording_gid': rec.get('id', ''),
+                })
+        return tracks
 
 
 class SpotifyProvider:
@@ -804,11 +1036,11 @@ class PlexMetadataOrchestrator:
         # Initialize providers
         self.nfo_generator = PlexNFOGenerator()
         
-        # Music providers — priority: local MB DB → Spotify → MusicBrainz REST API
+        # Music providers — priority: local MB (PostgreSQL) → local MB (JSON) → Spotify → REST API
         # Local MusicBrainz PostgreSQL database (optional)
         self.mb_local: Optional[LocalMusicBrainzProvider] = None
         mb_db_cfg = config.get('musicbrainz_db', {})
-        if mb_db_cfg.get('host') or mb_db_cfg.get('dbname'):
+        if mb_db_cfg.get('skip') is not True and (mb_db_cfg.get('host') or mb_db_cfg.get('dbname')):
             provider = LocalMusicBrainzProvider(
                 host=mb_db_cfg.get('host', 'localhost'),
                 port=int(mb_db_cfg.get('port', 5432)),
@@ -820,7 +1052,18 @@ class PlexMetadataOrchestrator:
             if provider.connect():
                 self.mb_local = provider
             else:
-                logger.warning("Local MusicBrainz DB configured but unreachable — falling back to REST API")
+                logger.warning("Local MusicBrainz DB configured but unreachable — trying JSON dump next")
+
+        # Local MusicBrainz JSON dump (optional; used if PostgreSQL provider unavailable)
+        self.mb_json: Optional[LocalJsonMusicBrainzProvider] = None
+        if self.mb_local is None:
+            json_dump_dir = config.get('musicbrainz_json_dump_dir', '')
+            if json_dump_dir:
+                json_provider = LocalJsonMusicBrainzProvider(json_dump_dir)
+                if json_provider.connect():
+                    self.mb_json = json_provider
+                else:
+                    logger.warning("MusicBrainz JSON dump configured but unavailable — falling back to REST API")
 
         # MusicBrainz REST API (no key required, just user-agent)
         self.musicbrainz = MusicBrainzProvider(
@@ -889,10 +1132,10 @@ class PlexMetadataOrchestrator:
         artist_name = artist_path.name
         logger.info(f"Processing music artist: {artist_name}")
         
-        # Search for artist metadata — priority: local MB DB → Spotify → MB REST API
+        # Search for artist metadata — priority: local MB DB → local MB JSON → Spotify → MB REST API
         artist_metadata = None
 
-        # 1. Local MusicBrainz DB (fast, no rate limits)
+        # 1. Local MusicBrainz PostgreSQL DB (fastest, no rate limits)
         if not artist_metadata and self.mb_local and self.mb_local.available:
             results = self.mb_local.search_artist(artist_name)
             if results:
@@ -902,7 +1145,17 @@ class PlexMetadataOrchestrator:
                 )
                 logger.info(f"Found artist '{artist_name}' in local MusicBrainz DB")
 
-        # 2. Spotify (richer images and genres)
+        # 2. Local MusicBrainz JSON dump (no PostgreSQL needed)
+        if not artist_metadata and self.mb_json and self.mb_json.available:
+            results = self.mb_json.search_artist(artist_name)
+            if results:
+                artist_metadata = ArtistMetadata(
+                    name=results[0]['name'],
+                    mbid=results[0]['id'],
+                )
+                logger.info(f"Found artist '{artist_name}' in local MusicBrainz JSON dump")
+
+        # 3. Spotify (richer images and genres)
         if not artist_metadata and self.spotify:
             results = self.spotify.search_artist(artist_name)
             if results:
@@ -958,10 +1211,10 @@ class PlexMetadataOrchestrator:
         album_name = album_path.name
         logger.info(f"Processing album: {album_name} by {artist_name}")
         
-        # Search for album metadata — priority: local MB DB → Spotify → MB REST API
+        # Search for album metadata — priority: local MB (PG) → local MB (JSON) → Spotify → REST
         album_metadata = None
 
-        # 1. Local MusicBrainz DB
+        # 1. Local MusicBrainz PostgreSQL DB
         if not album_metadata and self.mb_local and self.mb_local.available:
             results = self.mb_local.search_release(album_name, artist_name)
             if results:
@@ -970,7 +1223,16 @@ class PlexMetadataOrchestrator:
                 if album_metadata:
                     logger.info(f"Found album '{album_name}' in local MusicBrainz DB")
 
-        # 2. Spotify (has cover art URLs)
+        # 2. Local MusicBrainz JSON dump
+        if not album_metadata and self.mb_json and self.mb_json.available:
+            results = self.mb_json.search_release(album_name, artist_name)
+            if results:
+                mbid = results[0]['id']
+                album_metadata = self.mb_json.get_release(mbid)
+                if album_metadata:
+                    logger.info(f"Found album '{album_name}' in local MusicBrainz JSON dump")
+
+        # 3. Spotify (has cover art URLs)
         if not album_metadata and self.spotify:
             results = self.spotify.search_album(album_name, artist_name)
             if results:

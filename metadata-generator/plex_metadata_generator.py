@@ -499,11 +499,15 @@ def prompt_musicbrainz_local_db(config: dict, config_path: str) -> dict:
 
     wants_local = _prompt_yesno(
         'Plex Metadata Generator — Music Metadata',
-        'Do you have a local MusicBrainz PostgreSQL database?\n\n'
-        'A local database provides instant music metadata lookups with no\n'
-        'rate limits or internet dependency — ideal for large music libraries.\n\n'
-        'Download instructions: musicbrainz.org/doc/MusicBrainz_Database/Download\n\n'
-        'If you select No, the script will use the MusicBrainz REST API instead\n'
+        'Do you have a local MusicBrainz database?\n\n'
+        'A local database provides instant music lookups with no rate limits\n'
+        'or internet dependency — ideal for large music libraries.\n\n'
+        'Two download options:\n'
+        '  PostgreSQL dump (recommended for this script):\n'
+        '  https://data.metabrainz.org/pub/musicbrainz/data/fullexport/\n\n'
+        '  JSON dump (lightweight alternative, no PostgreSQL needed):\n'
+        '  https://data.metabrainz.org/pub/musicbrainz/data/json-dumps\n\n'
+        'If you select No, the MusicBrainz REST API is used instead\n'
         '(free, but rate-limited to ~1 request/second).\n\n'
         'Do you want to connect to a local MusicBrainz database?'
     )
@@ -515,7 +519,40 @@ def prompt_musicbrainz_local_db(config: dict, config_path: str) -> dict:
                                'Save your choice (skip local MusicBrainz DB) to config?')
         return config
 
-    # Gather connection details
+    # Ask which format the user has
+    wants_pg = _prompt_yesno(
+        'Plex Metadata Generator — MusicBrainz Format',
+        'Which MusicBrainz data format do you have?\n\n'
+        '• Yes  — PostgreSQL dump (fullexport)\n'
+        '         Fastest lookups; requires PostgreSQL to be running\n'
+        '         Download: data.metabrainz.org/pub/musicbrainz/data/fullexport/\n\n'
+        '• No   — JSON dump (json-dumps)\n'
+        '         No database server needed; files queried directly\n'
+        '         Download: data.metabrainz.org/pub/musicbrainz/data/json-dumps\n\n'
+        'Do you have the PostgreSQL (fullexport) dump?'
+    )
+
+    if not wants_pg:
+        # JSON dump path
+        existing_json_dir = config.get('musicbrainz_json_dump_dir', '')
+        json_dir = _prompt_text(
+            'Plex Metadata Generator — MusicBrainz JSON Dump',
+            'Enter the path to the extracted MusicBrainz JSON dump directory.\n\n'
+            'This should be the folder containing sub-directories:\n'
+            '  artist/  release/  release-group/  recording/\n\n'
+            'Download: https://data.metabrainz.org/pub/musicbrainz/data/json-dumps',
+            default=existing_json_dir,
+        )
+        if json_dir and os.path.isdir(json_dir):
+            config['musicbrainz_json_dump_dir'] = json_dir.rstrip('/').rstrip('\\')
+            config.setdefault('musicbrainz_db', {})['skip'] = True
+            _save_config_if_agreed(config, config_path,
+                                   'Save MusicBrainz JSON dump path to config?')
+        else:
+            logger.warning(f"  Directory not found: {json_dir} — will use REST API")
+        return config
+
+    # Gather PostgreSQL connection details
     defaults = {
         'host':     mb_cfg.get('host', 'localhost'),
         'port':     str(mb_cfg.get('port', 5432)),
@@ -562,8 +599,10 @@ def prompt_musicbrainz_local_db(config: dict, config_path: str) -> dict:
             'Common causes:\n'
             '• PostgreSQL is not running  (sudo systemctl start postgresql)\n'
             '• Wrong host / port / credentials\n'
-            '• Database not yet imported  (see mbdump import docs)\n'
+            '• Database not yet imported  (mbdump: data.metabrainz.org/pub/musicbrainz/data/fullexport/)\n'
             '• psycopg2 not installed     (pip install psycopg2-binary)\n\n'
+            'Tip: if PostgreSQL is unavailable, select No and use the JSON dump instead\n'
+            '(data.metabrainz.org/pub/musicbrainz/data/json-dumps — no database needed)\n\n'
             'Try entering the connection details again?'
         )
         if not retry:
