@@ -2,7 +2,7 @@
 """
 Plex Metadata NFO Generator with Multi-Media Support
 Supports: TV Shows + Music (Albums, Artists, Tracks)
-Integrates with: Tunarr, TVDb, TMDb, MusicBrainz, Spotify APIs
+Integrates with: Tunarr, TVDb, TMDb, MusicBrainz, iTunes Search API, Apple MusicKit API
 """
 
 import os
@@ -86,8 +86,8 @@ class AlbumMetadata:
     rating: float
     plot: str = ""
     genres: List[str] = field(default_factory=list)
-    mbid: Optional[str] = None  # MusicBrainz ID
-    spotify_id: Optional[str] = None
+    mbid: Optional[str] = None      # MusicBrainz ID
+    apple_id: Optional[str] = None  # iTunes / Apple Music collection ID
     cover_url: Optional[str] = None
     release_date: Optional[str] = None
     track_count: int = 0
@@ -99,7 +99,7 @@ class ArtistMetadata:
     """Container for music artist metadata"""
     name: str
     mbid: Optional[str] = None
-    spotify_id: Optional[str] = None
+    apple_id: Optional[str] = None  # iTunes / Apple Music artist ID
     bio: str = ""
     genres: List[str] = field(default_factory=list)
     image_url: Optional[str] = None
@@ -717,133 +717,343 @@ class LocalJsonMusicBrainzProvider:
         return tracks
 
 
-class SpotifyProvider:
-    """Fetch metadata from Spotify API"""
-    
-    BASE_URL = 'https://api.spotify.com/v1'
-    AUTH_URL = 'https://accounts.spotify.com/api/token'
-    
-    def __init__(self, client_id: str, client_secret: str):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.access_token = None
-        self.token_expiry = None
-    
-    def authenticate(self) -> bool:
-        """Get access token using Client Credentials flow"""
+class iTunesProvider:
+    """
+    Fetch music metadata from the free iTunes Search API.
+
+    No API key or account required.  Artwork URLs are returned at 100×100
+    by default; _artwork_url() upscales them to full resolution (up to 3000×3000)
+    by rewriting the size segment in the CDN path.
+    """
+
+    SEARCH_URL  = 'https://itunes.apple.com/search'
+    LOOKUP_URL  = 'https://itunes.apple.com/lookup'
+    # Rate limit: Apple doesn't publish an exact number but 20 req/s is safe.
+    _MIN_INTERVAL = 0.1
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({'User-Agent': 'PlexMetadataGenerator/1.0'})
+        self._last_request_time: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _get(self, url: str, params: dict) -> Optional[dict]:
+        """Rate-limited GET; returns parsed JSON or None on error."""
+        import re
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self._MIN_INTERVAL:
+            time.sleep(self._MIN_INTERVAL - elapsed)
+        self._last_request_time = time.time()
         try:
-            auth = (self.client_id, self.client_secret)
-            data = {'grant_type': 'client_credentials'}
-            
-            response = requests.post(self.AUTH_URL, auth=auth, data=data, timeout=10)
-            response.raise_for_status()
-            
-            self.access_token = response.json()['access_token']
-            self.token_expiry = datetime.now() + timedelta(hours=1)
-            logger.info("Successfully authenticated with Spotify")
-            return True
+            resp = self.session.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
         except requests.RequestException as e:
-            logger.error(f"Spotify authentication failed: {e}")
-            return False
-    
-    def _get_headers(self) -> Dict[str, str]:
-        """Return authorization headers"""
-        return {'Authorization': f'Bearer {self.access_token}'}
-    
-    def search_album(self, album_title: str, artist: str) -> List[Dict]:
-        """Search for an album"""
-        if not self.access_token:
-            return []
-        
-        try:
-            query = f'album:{album_title} artist:{artist}'
-            params = {'q': query, 'type': 'album', 'limit': 10}
-            
-            response = requests.get(
-                f'{self.BASE_URL}/search',
-                headers=self._get_headers(),
-                params=params,
-                timeout=10
-            )
-            response.raise_for_status()
-            
-            results = response.json().get('albums', {}).get('items', [])
-            logger.debug(f"Spotify search for '{album_title}' returned {len(results)} results")
-            return results
-        except requests.RequestException as e:
-            logger.error(f"Spotify album search failed: {e}")
-            return []
-    
-    def get_album(self, album_id: str) -> Optional[AlbumMetadata]:
-        """Fetch complete album metadata by Spotify ID"""
-        if not self.access_token:
+            logger.debug(f"iTunes API error: {e}")
             return None
-        
-        try:
-            response = requests.get(
-                f'{self.BASE_URL}/albums/{album_id}',
-                headers=self._get_headers(),
-                timeout=10
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            # Extract metadata
-            artists = [a['name'] for a in data.get('artists', [])]
-            artist = ', '.join(artists) or 'Unknown Artist'
-            
-            # Parse year from release date
-            release_date = data.get('release_date', '')
-            year = int(release_date.split('-')[0]) if release_date else 0
-            
-            # Get cover art
-            cover_url = None
-            images = data.get('images', [])
-            if images:
-                # Prefer larger image
-                images_sorted = sorted(images, key=lambda x: x.get('width', 0), reverse=True)
-                cover_url = images_sorted[0]['url']
-            
-            metadata = AlbumMetadata(
-                title=data.get('name', ''),
-                artist=artist,
-                year=year,
-                rating=0.0,  # Spotify doesn't have ratings, could use popularity (0-100)
-                spotify_id=album_id,
-                cover_url=cover_url,
-                release_date=release_date,
-                track_count=data.get('total_tracks', 0),
-                genres=data.get('genres', [])
-            )
-            
-            logger.info(f"Retrieved Spotify metadata for '{metadata.title}' by '{metadata.artist}'")
-            return metadata
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch Spotify album {album_id}: {e}")
-            return None
-    
+
+    @staticmethod
+    def _artwork_url(url: str, size: int = 3000) -> str:
+        """Replace the WxHbb size token in an Apple CDN URL to get full-res art."""
+        import re
+        return re.sub(r'\d+x\d+bb', f'{size}x{size}bb', url) if url else url
+
+    # ------------------------------------------------------------------
+    # Artist search
+    # ------------------------------------------------------------------
+
     def search_artist(self, artist_name: str) -> List[Dict]:
-        """Search for an artist"""
-        if not self.access_token:
+        """Return iTunes artist records matching artist_name."""
+        data = self._get(self.SEARCH_URL, {
+            'term': artist_name,
+            'entity': 'musicArtist',
+            'limit': 5,
+        })
+        if not data:
             return []
-        
-        try:
-            params = {'q': artist_name, 'type': 'artist', 'limit': 10}
-            
-            response = requests.get(
-                f'{self.BASE_URL}/search',
-                headers=self._get_headers(),
-                params=params,
-                timeout=10
+        results = [r for r in data.get('results', [])
+                   if r.get('wrapperType') == 'artist']
+        logger.debug(f"iTunes artist search '{artist_name}' → {len(results)} results")
+        return results
+
+    # ------------------------------------------------------------------
+    # Album search + fetch
+    # ------------------------------------------------------------------
+
+    def search_album(self, album_title: str, artist: str) -> List[Dict]:
+        """Return iTunes collection records matching album + artist."""
+        data = self._get(self.SEARCH_URL, {
+            'term': f'{album_title} {artist}',
+            'entity': 'album',
+            'limit': 10,
+        })
+        if not data:
+            return []
+        results = [r for r in data.get('results', [])
+                   if r.get('wrapperType') == 'collection']
+        logger.debug(f"iTunes album search '{album_title}' by '{artist}' → {len(results)} results")
+        return results
+
+    def get_album(self, collection_id: str) -> Optional[AlbumMetadata]:
+        """Fetch full album metadata by iTunes collection ID."""
+        data = self._get(self.LOOKUP_URL, {
+            'id': collection_id,
+            'entity': 'song',
+        })
+        if not data or not data.get('results'):
+            return None
+
+        results = data['results']
+        # First result is the collection itself; remaining are tracks.
+        album_rec = results[0]
+        if album_rec.get('wrapperType') != 'collection':
+            return None
+
+        release_date = album_rec.get('releaseDate', '')
+        year = int(release_date[:4]) if release_date else 0
+        track_count = album_rec.get('trackCount', len(results) - 1)
+        raw_art = album_rec.get('artworkUrl100', '')
+        cover_url = self._artwork_url(raw_art) if raw_art else None
+
+        genres = []
+        if album_rec.get('primaryGenreName'):
+            genres = [album_rec['primaryGenreName']]
+
+        metadata = AlbumMetadata(
+            title=album_rec.get('collectionName', ''),
+            artist=album_rec.get('artistName', 'Unknown Artist'),
+            year=year,
+            rating=0.0,
+            apple_id=str(collection_id),
+            cover_url=cover_url,
+            release_date=release_date[:10] if release_date else '',
+            track_count=track_count,
+            genres=genres,
+            label=album_rec.get('copyright', ''),
+        )
+        logger.info(f"Retrieved iTunes metadata for '{metadata.title}' by '{metadata.artist}'")
+        return metadata
+
+    # ------------------------------------------------------------------
+    # Convenience: build ArtistMetadata from a search result row
+    # ------------------------------------------------------------------
+
+    def build_artist_metadata(self, record: dict) -> ArtistMetadata:
+        raw_art = record.get('artworkUrl100', '')
+        return ArtistMetadata(
+            name=record.get('artistName', ''),
+            apple_id=str(record.get('artistId', '')),
+            genres=[record['primaryGenreName']] if record.get('primaryGenreName') else [],
+            image_url=self._artwork_url(raw_art) if raw_art else None,
+        )
+
+
+# Optional dependency — only imported when MusicKit credentials are configured.
+try:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.backends import default_backend
+    import base64 as _b64
+    _CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    _CRYPTOGRAPHY_AVAILABLE = False
+
+
+class AppleMusicKitProvider:
+    """
+    Fetch music metadata from the Apple MusicKit API.
+
+    Requires an Apple Developer account (99 USD/yr) with a MusicKit key:
+      1. developer.apple.com → Certificates, Identifiers & Profiles → Keys
+      2. Create a key with "MusicKit" enabled → download the .p8 file
+      3. Note the Key ID (shown on the key page) and your Team ID (top-right
+         of the developer portal, 10-char string like "ABCDE12345")
+
+    Tokens are JWTs signed with ES256 (the .p8 key).  They last up to 6 months;
+    this class regenerates one lazily whenever the current one is within 60 s of
+    expiry.
+    """
+
+    BASE_URL = 'https://api.music.apple.com/v1'
+
+    def __init__(self, team_id: str, key_id: str, private_key_path: str,
+                 storefront: str = 'us'):
+        self.team_id = team_id
+        self.key_id = key_id
+        self.private_key_path = private_key_path
+        self.storefront = storefront
+        self._token: Optional[str] = None
+        self._token_expiry: float = 0.0
+        self.session = requests.Session()
+
+    # ------------------------------------------------------------------
+    # Auth
+    # ------------------------------------------------------------------
+
+    def _make_token(self) -> Optional[str]:
+        if not _CRYPTOGRAPHY_AVAILABLE:
+            logger.warning(
+                "Apple MusicKit requires the 'cryptography' package: "
+                "pip install cryptography"
             )
-            response.raise_for_status()
-            
-            results = response.json().get('artists', {}).get('items', [])
-            logger.debug(f"Spotify artist search for '{artist_name}' returned {len(results)} results")
-            return results
+            return None
+        try:
+            with open(self.private_key_path, 'rb') as f:
+                private_key = serialization.load_pem_private_key(
+                    f.read(), password=None, backend=default_backend()
+                )
+        except Exception as e:
+            logger.error(f"Could not load MusicKit private key: {e}")
+            return None
+
+        now = int(time.time())
+        exp = now + 15_777_000  # 6 months (Apple's maximum)
+
+        # Build JWT manually (avoid PyJWT dependency for simplicity)
+        import json as _json
+        import struct
+
+        def _b64url(data: bytes) -> str:
+            return _b64.urlsafe_b64encode(data).rstrip(b'=').decode()
+
+        header  = _b64url(_json.dumps({'alg': 'ES256', 'kid': self.key_id}).encode())
+        payload = _b64url(_json.dumps({'iss': self.team_id, 'iat': now, 'exp': exp}).encode())
+        signing_input = f'{header}.{payload}'.encode()
+
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        signature_der = private_key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+
+        # Convert DER signature to raw r||s (64 bytes) for ES256
+        r, s = decode_dss_signature(signature_der)
+        sig_bytes = r.to_bytes(32, 'big') + s.to_bytes(32, 'big')
+
+        self._token = f'{header}.{payload}.{_b64url(sig_bytes)}'
+        self._token_expiry = exp - 60  # refresh 60 s before actual expiry
+        logger.info("Generated Apple MusicKit developer token")
+        return self._token
+
+    def _get_token(self) -> Optional[str]:
+        if not self._token or time.time() >= self._token_expiry:
+            return self._make_token()
+        return self._token
+
+    def _headers(self) -> Optional[dict]:
+        token = self._get_token()
+        if not token:
+            return None
+        return {'Authorization': f'Bearer {token}'}
+
+    # ------------------------------------------------------------------
+    # Availability check
+    # ------------------------------------------------------------------
+
+    def available(self) -> bool:
+        """Return True if we can generate a valid token."""
+        return self._get_token() is not None
+
+    # ------------------------------------------------------------------
+    # Internal GET
+    # ------------------------------------------------------------------
+
+    def _get(self, path: str, params: dict = None) -> Optional[dict]:
+        hdrs = self._headers()
+        if not hdrs:
+            return None
+        try:
+            resp = self.session.get(
+                f'{self.BASE_URL}{path}',
+                headers=hdrs,
+                params=params or {},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            return resp.json()
         except requests.RequestException as e:
-            logger.error(f"Spotify artist search failed: {e}")
+            logger.debug(f"Apple MusicKit API error: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Artwork helper (same CDN pattern as iTunes)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _artwork_url(template: str, size: int = 3000) -> str:
+        """Replace {w}x{h} template tokens with actual pixel dimensions."""
+        return template.replace('{w}', str(size)).replace('{h}', str(size)) if template else template
+
+    # ------------------------------------------------------------------
+    # Artist search
+    # ------------------------------------------------------------------
+
+    def search_artist(self, artist_name: str) -> List[Dict]:
+        data = self._get(f'/catalog/{self.storefront}/search', {
+            'term': artist_name,
+            'types': 'artists',
+            'limit': 5,
+        })
+        if not data:
             return []
+        items = data.get('results', {}).get('artists', {}).get('data', [])
+        logger.debug(f"MusicKit artist search '{artist_name}' → {len(items)} results")
+        return items
+
+    def build_artist_metadata(self, record: dict) -> ArtistMetadata:
+        attrs = record.get('attributes', {})
+        art = attrs.get('artwork', {})
+        image_url = self._artwork_url(art.get('url', '')) if art else None
+        return ArtistMetadata(
+            name=attrs.get('name', ''),
+            apple_id=record.get('id', ''),
+            genres=attrs.get('genreNames', []),
+            image_url=image_url,
+        )
+
+    # ------------------------------------------------------------------
+    # Album search + fetch
+    # ------------------------------------------------------------------
+
+    def search_album(self, album_title: str, artist: str) -> List[Dict]:
+        data = self._get(f'/catalog/{self.storefront}/search', {
+            'term': f'{album_title} {artist}',
+            'types': 'albums',
+            'limit': 10,
+        })
+        if not data:
+            return []
+        items = data.get('results', {}).get('albums', {}).get('data', [])
+        logger.debug(f"MusicKit album search '{album_title}' by '{artist}' → {len(items)} results")
+        return items
+
+    def get_album(self, apple_id: str) -> Optional[AlbumMetadata]:
+        data = self._get(f'/catalog/{self.storefront}/albums/{apple_id}')
+        if not data or not data.get('data'):
+            return None
+        rec   = data['data'][0]
+        attrs = rec.get('attributes', {})
+
+        release_date = attrs.get('releaseDate', '')
+        year = int(release_date[:4]) if release_date else 0
+        art  = attrs.get('artwork', {})
+        cover_url = self._artwork_url(art.get('url', '')) if art else None
+
+        metadata = AlbumMetadata(
+            title=attrs.get('name', ''),
+            artist=attrs.get('artistName', 'Unknown Artist'),
+            year=year,
+            rating=0.0,
+            apple_id=apple_id,
+            cover_url=cover_url,
+            release_date=release_date,
+            track_count=attrs.get('trackCount', 0),
+            genres=attrs.get('genreNames', []),
+            label=attrs.get('recordLabel', ''),
+        )
+        logger.info(f"Retrieved MusicKit metadata for '{metadata.title}' by '{metadata.artist}'")
+        return metadata
 
 
 class PlexNFOGenerator:
@@ -926,11 +1136,11 @@ class PlexNFOGenerator:
         # MusicBrainz ID
         if metadata.mbid:
             ET.SubElement(root, 'mbid').text = metadata.mbid
-        
-        # Spotify ID
-        if metadata.spotify_id:
-            ET.SubElement(root, 'spotifyid').text = metadata.spotify_id
-        
+
+        # Apple Music / iTunes ID
+        if metadata.apple_id:
+            ET.SubElement(root, 'appleid').text = metadata.apple_id
+
         # Genres
         for genre in (metadata.genres or []):
             ET.SubElement(root, 'genre').text = genre
@@ -951,10 +1161,10 @@ class PlexNFOGenerator:
         
         if metadata.mbid:
             ET.SubElement(root, 'mbid').text = metadata.mbid
-        
-        if metadata.spotify_id:
-            ET.SubElement(root, 'spotifyid').text = metadata.spotify_id
-        
+
+        if metadata.apple_id:
+            ET.SubElement(root, 'appleid').text = metadata.apple_id
+
         for genre in (metadata.genres or []):
             ET.SubElement(root, 'genre').text = genre
         
@@ -1043,7 +1253,7 @@ class PlexMetadataOrchestrator:
         # Initialize providers
         self.nfo_generator = PlexNFOGenerator()
         
-        # Music providers — priority: local MB (PostgreSQL) → local MB (JSON) → Spotify → REST API
+        # Music providers — priority: local MB (PostgreSQL) → local MB (JSON) → Apple MusicKit → iTunes → MB REST
         # Local MusicBrainz PostgreSQL database (optional)
         self.mb_local: Optional[LocalMusicBrainzProvider] = None
         mb_db_cfg = config.get('musicbrainz_db', {})
@@ -1077,14 +1287,26 @@ class PlexMetadataOrchestrator:
             user_agent=f"PlexMetadataGenerator/1.0 (+{config.get('musicbrainz_contact', 'contact@example.com')})"
         )
 
-        spotify_config = config.get('spotify', {})
-        self.spotify = None
-        if spotify_config.get('enabled', True) and spotify_config.get('client_id') and spotify_config.get('client_secret'):
-            self.spotify = SpotifyProvider(
-                spotify_config['client_id'],
-                spotify_config['client_secret']
+        # iTunes Search API — always available, no credentials needed
+        self.itunes = iTunesProvider()
+        logger.info("iTunes Search API provider ready (no auth required)")
+
+        # Apple MusicKit API — optional; requires Apple Developer credentials
+        self.musickit: Optional[AppleMusicKitProvider] = None
+        mk_cfg = config.get('apple_musickit', {})
+        if (mk_cfg.get('enabled', False) and
+                mk_cfg.get('team_id') and mk_cfg.get('key_id') and mk_cfg.get('private_key_path')):
+            provider = AppleMusicKitProvider(
+                team_id=mk_cfg['team_id'],
+                key_id=mk_cfg['key_id'],
+                private_key_path=mk_cfg['private_key_path'],
+                storefront=mk_cfg.get('storefront', 'us'),
             )
-            self.spotify.authenticate()
+            if provider.available():
+                self.musickit = provider
+                logger.info("Apple MusicKit API provider ready")
+            else:
+                logger.warning("Apple MusicKit credentials configured but token generation failed — falling back to iTunes")
         
         # TV providers (from previous implementation)
         from plex_metadata_generator import TVDbProvider, TMDbProvider, TunarrMetadataProvider, MetadataDownloader
@@ -1139,7 +1361,7 @@ class PlexMetadataOrchestrator:
         artist_name = artist_path.name
         logger.info(f"Processing music artist: {artist_name}")
         
-        # Search for artist metadata — priority: local MB DB → local MB JSON → Spotify → MB REST API
+        # Search for artist metadata — priority: local MB PG → local MB JSON → MusicKit → iTunes → MB REST
         artist_metadata = None
 
         # 1. Local MusicBrainz PostgreSQL DB (fastest, no rate limits)
@@ -1152,7 +1374,7 @@ class PlexMetadataOrchestrator:
                 )
                 logger.info(f"Found artist '{artist_name}' in local MusicBrainz DB")
 
-        # 2. Local MusicBrainz JSON dump (no PostgreSQL needed)
+        # 2. Local MusicBrainz JSON dump
         if not artist_metadata and self.mb_json and self.mb_json.available:
             results = self.mb_json.search_artist(artist_name)
             if results:
@@ -1162,20 +1384,21 @@ class PlexMetadataOrchestrator:
                 )
                 logger.info(f"Found artist '{artist_name}' in local MusicBrainz JSON dump")
 
-        # 3. Spotify (richer images and genres)
-        if not artist_metadata and self.spotify:
-            results = self.spotify.search_artist(artist_name)
+        # 3. Apple MusicKit API (rich artwork + genres; requires Developer account)
+        if not artist_metadata and self.musickit:
+            results = self.musickit.search_artist(artist_name)
             if results:
-                artist_id = results[0]['id']
-                artist_metadata = ArtistMetadata(
-                    name=results[0]['name'],
-                    spotify_id=artist_id,
-                    genres=results[0].get('genres', []),
-                    image_url=results[0].get('images', [{}])[0].get('url') if results[0].get('images') else None,
-                )
-                logger.info(f"Found artist '{artist_name}' on Spotify")
+                artist_metadata = self.musickit.build_artist_metadata(results[0])
+                logger.info(f"Found artist '{artist_name}' via Apple MusicKit")
 
-        # 3. MusicBrainz REST API (fallback, rate-limited)
+        # 4. iTunes Search API (free, no auth, always available)
+        if not artist_metadata and self.itunes:
+            results = self.itunes.search_artist(artist_name)
+            if results:
+                artist_metadata = self.itunes.build_artist_metadata(results[0])
+                logger.info(f"Found artist '{artist_name}' via iTunes")
+
+        # 5. MusicBrainz REST API (rate-limited fallback)
         if not artist_metadata and self.musicbrainz:
             results = self.musicbrainz.search_artist(artist_name)
             if results:
@@ -1218,7 +1441,7 @@ class PlexMetadataOrchestrator:
         album_name = album_path.name
         logger.info(f"Processing album: {album_name} by {artist_name}")
         
-        # Search for album metadata — priority: local MB (PG) → local MB (JSON) → Spotify → REST
+        # Search for album metadata — priority: local MB PG → local MB JSON → MusicKit → iTunes → MB REST
         album_metadata = None
 
         # 1. Local MusicBrainz PostgreSQL DB
@@ -1239,16 +1462,25 @@ class PlexMetadataOrchestrator:
                 if album_metadata:
                     logger.info(f"Found album '{album_name}' in local MusicBrainz JSON dump")
 
-        # 3. Spotify (has cover art URLs)
-        if not album_metadata and self.spotify:
-            results = self.spotify.search_album(album_name, artist_name)
+        # 3. Apple MusicKit API (high-res artwork + full metadata)
+        if not album_metadata and self.musickit:
+            results = self.musickit.search_album(album_name, artist_name)
             if results:
-                album_id = results[0]['id']
-                album_metadata = self.spotify.get_album(album_id)
+                apple_id = results[0].get('id', '')
+                album_metadata = self.musickit.get_album(apple_id)
                 if album_metadata:
-                    logger.info(f"Found album '{album_name}' on Spotify")
+                    logger.info(f"Found album '{album_name}' via Apple MusicKit")
 
-        # 3. MusicBrainz REST API
+        # 4. iTunes Search API (free, no auth)
+        if not album_metadata and self.itunes:
+            results = self.itunes.search_album(album_name, artist_name)
+            if results:
+                collection_id = results[0].get('collectionId', '')
+                album_metadata = self.itunes.get_album(collection_id)
+                if album_metadata:
+                    logger.info(f"Found album '{album_name}' via iTunes")
+
+        # 5. MusicBrainz REST API (rate-limited fallback)
         if not album_metadata and self.musicbrainz:
             results = self.musicbrainz.search_release(album_name, artist_name)
             if results:
@@ -1397,6 +1629,222 @@ class PlexMetadataOrchestrator:
             raise
 
 
+def _apple_musickit_dialog_tkinter() -> Optional[dict]:
+    """
+    Show a native macOS Tkinter form to collect Apple Developer credentials.
+    Returns a dict with keys team_id, key_id, private_key_path, storefront,
+    or None if the user cancelled.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import ttk, filedialog, messagebox
+    except ImportError:
+        return None
+
+    result: dict = {}
+    root = tk.Tk()
+    root.title("Apple MusicKit Credentials")
+    root.resizable(False, False)
+
+    # Try to make it look native on macOS
+    try:
+        root.tk.call('::tk::unsupported::MacWindowStyle', 'style', root._w, 'moveableModal', '')
+    except Exception:
+        pass
+
+    pad = {'padx': 12, 'pady': 6}
+
+    tk.Label(root, text="Apple MusicKit API Setup", font=('Helvetica', 14, 'bold')).grid(
+        row=0, column=0, columnspan=3, pady=(14, 4))
+    tk.Label(root,
+             text="Enter your Apple Developer credentials to enable the MusicKit API.\n"
+                  "Get these at developer.apple.com → Certificates, Identifiers & Profiles → Keys.",
+             justify='left', wraplength=480).grid(row=1, column=0, columnspan=3, **pad)
+
+    fields = [
+        ('Team ID',    'team_id',          'Your 10-character Apple Developer Team ID  (e.g. ABCDE12345)'),
+        ('Key ID',     'key_id',           '10-character Key ID shown on your MusicKit key page'),
+        ('Storefront', 'storefront',        'Two-letter country code for catalog searches (default: us)'),
+    ]
+
+    entries: dict = {}
+    for row_idx, (label, key, hint) in enumerate(fields, start=2):
+        tk.Label(root, text=label + ':', anchor='e', width=14).grid(row=row_idx, column=0, **pad, sticky='e')
+        var = tk.StringVar(value='us' if key == 'storefront' else '')
+        entry = tk.Entry(root, textvariable=var, width=40)
+        entry.grid(row=row_idx, column=1, **pad, sticky='w')
+        tk.Label(root, text=hint, fg='grey', font=('Helvetica', 10)).grid(
+            row=row_idx, column=2, padx=(0, 12), sticky='w')
+        entries[key] = var
+
+    # Private key picker
+    pk_row = len(fields) + 2
+    tk.Label(root, text='Private Key (.p8):', anchor='e', width=14).grid(row=pk_row, column=0, **pad, sticky='e')
+    pk_var = tk.StringVar()
+    pk_entry = tk.Entry(root, textvariable=pk_var, width=40)
+    pk_entry.grid(row=pk_row, column=1, **pad, sticky='w')
+    tk.Button(root, text='Browse…', command=lambda: pk_var.set(
+        filedialog.askopenfilename(title='Select .p8 private key', filetypes=[('P8 key', '*.p8'), ('All', '*')])
+    )).grid(row=pk_row, column=2, padx=(0, 12), pady=6)
+
+    def on_ok():
+        team = entries['team_id'].get().strip()
+        key  = entries['key_id'].get().strip()
+        sf   = entries['storefront'].get().strip() or 'us'
+        pk   = pk_var.get().strip()
+        if not team or not key or not pk:
+            messagebox.showerror('Missing fields', 'Team ID, Key ID, and the .p8 file are all required.')
+            return
+        if not os.path.isfile(pk):
+            messagebox.showerror('File not found', f'Private key not found:\n{pk}')
+            return
+        result.update({'team_id': team, 'key_id': key, 'private_key_path': pk, 'storefront': sf})
+        root.quit()
+
+    def on_cancel():
+        root.quit()
+
+    btn_frame = tk.Frame(root)
+    btn_frame.grid(row=pk_row + 1, column=0, columnspan=3, pady=(8, 14))
+    tk.Button(btn_frame, text='Cancel', width=10, command=on_cancel).pack(side='left', padx=8)
+    tk.Button(btn_frame, text='OK', width=10, default='active', command=on_ok).pack(side='left', padx=8)
+    root.bind('<Return>', lambda e: on_ok())
+    root.bind('<Escape>', lambda e: on_cancel())
+
+    root.update_idletasks()
+    # Centre on screen
+    w, h = root.winfo_width(), root.winfo_height()
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    root.geometry(f'+{(sw - w) // 2}+{(sh - h) // 2}')
+
+    root.mainloop()
+    try:
+        root.destroy()
+    except Exception:
+        pass
+
+    return result if result else None
+
+
+def _apple_musickit_dialog_console() -> Optional[dict]:
+    """Sequential console prompts as a fallback when no display is available."""
+    print('\n── Apple MusicKit API Setup ──────────────────────────────────')
+    print('Enter your Apple Developer credentials (Ctrl-C to skip).')
+    print('Get them at developer.apple.com → Certificates → Keys\n')
+    try:
+        team_id = input('  Team ID (e.g. ABCDE12345): ').strip()
+        if not team_id:
+            return None
+        key_id  = input('  Key ID: ').strip()
+        if not key_id:
+            return None
+        pk_path = input('  Path to .p8 private key file: ').strip()
+        if not pk_path or not os.path.isfile(pk_path):
+            print('  ⚠ File not found — skipping MusicKit setup.')
+            return None
+        storefront = input('  Storefront (default: us): ').strip() or 'us'
+        return {'team_id': team_id, 'key_id': key_id,
+                'private_key_path': pk_path, 'storefront': storefront}
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return None
+
+
+def prompt_apple_music_credentials(config: dict, config_path: str) -> dict:
+    """
+    Pre-flight dialog for Apple MusicKit credentials.
+
+    If credentials are already configured (and the key file exists), this is a
+    no-op.  If the user declines, apple_musickit.skip is set to True so the
+    question is not asked again on future runs.
+
+    The iTunes Search API is always active regardless of this dialog.
+    """
+    import platform
+
+    mk = config.get('apple_musickit', {})
+
+    # Already fully configured → nothing to ask
+    if (mk.get('team_id') and mk.get('key_id') and mk.get('private_key_path')
+            and os.path.isfile(mk.get('private_key_path', ''))):
+        logger.info("Apple MusicKit credentials already configured")
+        return config
+
+    # User previously said no → respect it
+    if mk.get('skip') is True:
+        return config
+
+    # --- Ask the user ---
+    print('\n╔══════════════════════════════════════════════════════════╗')
+    print('║       Apple MusicKit API  (optional enhancement)        ║')
+    print('╠══════════════════════════════════════════════════════════╣')
+    print('║  The free iTunes Search API is already active.          ║')
+    print('║  MusicKit (requires Apple Developer account, $99/yr)    ║')
+    print('║  adds higher-resolution artwork and richer metadata.    ║')
+    print('╚══════════════════════════════════════════════════════════╝')
+    try:
+        answer = input('\nDo you have an Apple Developer account and want to set up MusicKit? [y/N] ').strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        answer = 'n'
+
+    if answer not in ('y', 'yes'):
+        config.setdefault('apple_musickit', {})['skip'] = True
+        _save_config_if_agreed(config, config_path)
+        return config
+
+    # --- Collect credentials ---
+    creds = None
+
+    # Try native Tkinter dialog on macOS with a display
+    if platform.system() == 'Darwin' and os.environ.get('DISPLAY', '') != '' or \
+            (platform.system() == 'Darwin' and 'TERM_PROGRAM' not in os.environ):
+        # On macOS the display is always available even without $DISPLAY
+        creds = _apple_musickit_dialog_tkinter()
+
+    if creds is None:
+        creds = _apple_musickit_dialog_console()
+
+    if not creds:
+        print('  MusicKit setup skipped — iTunes Search API will be used instead.')
+        config.setdefault('apple_musickit', {})['skip'] = True
+        _save_config_if_agreed(config, config_path)
+        return config
+
+    # --- Test the token ---
+    print('  Testing MusicKit credentials…', end=' ', flush=True)
+    provider = AppleMusicKitProvider(**creds)
+    if provider.available():
+        print('✓ Token generated successfully')
+        config['apple_musickit'] = {**creds, 'enabled': True, 'skip': False}
+    else:
+        print('✗ Token generation failed')
+        if not _CRYPTOGRAPHY_AVAILABLE:
+            print("  Install the 'cryptography' package:  pip install cryptography")
+        print('  MusicKit setup failed — iTunes Search API will be used instead.')
+        config.setdefault('apple_musickit', {})['skip'] = True
+        _save_config_if_agreed(config, config_path)
+        return config
+
+    _save_config_if_agreed(config, config_path)
+    return config
+
+
+def _save_config_if_agreed(config: dict, config_path: str):
+    """Offer to persist updated config to disk (shared helper)."""
+    try:
+        answer = input('  Save these settings to config file? [Y/n] ').strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        answer = 'n'
+    if answer in ('', 'y', 'yes'):
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            print(f'  ✓ Saved to {config_path}')
+        except Exception as e:
+            print(f'  ✗ Could not save: {e}')
+
+
 def load_config(config_file: str = '/etc/plex-metadata-generator.conf') -> Dict:
     """Load configuration from JSON file"""
     try:
@@ -1450,6 +1898,10 @@ if __name__ == '__main__':
         logging.getLogger().setLevel(logging.DEBUG)
 
     config = load_config(args.config)
+
+    # Pre-flight: prompt for Apple MusicKit credentials if not already set
+    config = prompt_apple_music_credentials(config, args.config)
+
     orchestrator = PlexMetadataOrchestrator(config)
     orchestrator.force = getattr(args, 'force', False)
     orchestrator.run(args.media_type, args.item)
