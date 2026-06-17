@@ -305,3 +305,83 @@ python3 metadata-generator/health-check.py
 ```
 
 This verifies your configuration, tests API connectivity (including FanArt.tv), checks scheduling status, and reports recent log activity.
+
+---
+
+## Extended Script Setup (TV + Movies + Music)
+
+Use `plex_metadata_generator_extended.py` if you have a Music library in Plex. It is a strict superset of the base script — it handles movies and TV identically, and adds music support.
+
+### Additional requirements
+
+| Requirement | When needed | Install |
+|-------------|-------------|---------|
+| `cryptography` Python package | Apple MusicKit only | `pip3 install cryptography` |
+| `psycopg2-binary` Python package | MusicBrainz local PostgreSQL DB only | `pip3 install psycopg2-binary` |
+| PostgreSQL | MusicBrainz local DB only | `brew install postgresql` / `apt install postgresql` |
+
+Everything else (iTunes Search API, MusicBrainz REST) requires no additional packages.
+
+### Additional config sections
+
+Add these to your config file on top of the base config:
+
+```json
+{
+  "music_library_root": "/path/to/Music",
+  "plex": {
+    "music_library_key": "3"
+  },
+  "musicbrainz_contact": "your@email.com",
+  "apple_musickit": {
+    "enabled": false,
+    "team_id": "YOUR_TEAM_ID",
+    "key_id": "YOUR_KEY_ID",
+    "private_key_path": "/path/to/AuthKey.p8",
+    "storefront": "us"
+  },
+  "metadata_priority": {
+    "tv":    ["tvdb", "tmdb", "tunarr"],
+    "movies": ["tmdb"],
+    "music": ["apple_musickit", "itunes", "musicbrainz"]
+  }
+}
+```
+
+iTunes Search API requires no configuration — it is always active.
+
+### Test run
+
+```bash
+python3 metadata-generator/plex_metadata_generator_extended.py \
+  --config /etc/plex-metadata-generator.conf \
+  --media-type music --debug
+```
+
+### Initial bulk pass (large library)
+
+For an initial run over a large library, use parallel workers for ~4× throughput:
+
+```bash
+python3 metadata-generator/plex_metadata_generator_extended.py \
+  --media-type all --workers 4 --no-prompts
+```
+
+For all subsequent scheduled daily runs, drop `--workers` (default 1 is fine — most items will be skipped as already complete).
+
+### First-run dialogs (no config editing required)
+
+If you prefer, run the script with no arguments — it will detect missing configuration and walk you through setup via native OS dialogs:
+
+```bash
+python3 metadata-generator/plex_metadata_generator_extended.py
+```
+
+Dialogs will appear for:
+- Library paths (folder picker for Movies, TV, Music — with multi-volume support)
+- API keys (TMDB, TVDB, FanArt.tv, OpenSubtitles, Apple MusicKit — each validated live)
+- Scan mode (full rescan vs. selective)
+
+All entered values are offered for save to the config file at the end.
+
+See the **[Extended Script Reference](plex_metadata_generator_extended-Reference)** and **[API Keys Guide](API-Keys)** for full details.

@@ -6,15 +6,18 @@ Integrates with: Tunarr, TVDb, TMDb, MusicBrainz, iTunes Search API, Apple Music
 """
 
 import os
+import re
 import sys
 import json
 import logging
 import requests
 import sqlite3
+import unicodedata
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Set, Tuple
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
@@ -1342,19 +1345,31 @@ class PlexMetadataOrchestrator:
     
     def process_music_library(self, specific_artist: str = None):
         """Process music library (artists and albums)"""
-        logger.info("Processing music library")
+        workers = getattr(self, 'workers', 1)
+        logger.info(f"Processing music library ({workers} worker(s))")
 
         if not self.music_library_root.exists():
             logger.error(f"Music library root does not exist: {self.music_library_root}")
             return
 
         # Structure: Artist / Album / Tracks
-        for artist_dir in sorted(self.music_library_root.iterdir()):
-            if not artist_dir.is_dir() or artist_dir.name.startswith('.'):
-                continue
-            if specific_artist and artist_dir.name != specific_artist:
-                continue
-            self._process_music_artist(artist_dir)
+        artist_dirs = [
+            d for d in sorted(self.music_library_root.iterdir())
+            if d.is_dir() and not d.name.startswith('.')
+            and (not specific_artist or d.name == specific_artist)
+        ]
+
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(self._process_music_artist, d): d for d in artist_dirs}
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Error processing {futures[future].name}: {e}")
+        else:
+            for artist_dir in artist_dirs:
+                self._process_music_artist(artist_dir)
     
     def _process_tv_show(self, show_name: str, show_path: Path):
         """Process a single TV show (existing implementation)"""
@@ -1612,9 +1627,10 @@ class PlexMetadataOrchestrator:
 
             if media_type in ('movies', 'all'):
                 logger.info("Starting movie metadata generation")
-                # Delegate to base script's process_movie_library
+                # Delegate to base script's process_movie_library (full NFO + artwork)
                 from plex_metadata_generator import PlexMetadataOrchestrator as BaseOrchestrator
-                base = BaseOrchestrator(self.config, force=self.force)
+                base = BaseOrchestrator(self.config, force=self.force,
+                                        workers=getattr(self, 'workers', 1))
                 base.process_movie_library(specific_movie=specific_item)
 
             if media_type in ('music', 'all'):
@@ -1844,18 +1860,162 @@ def _save_config_if_agreed(config: dict, config_path: str):
             print(f'  ✗ Could not save: {e}')
 
 
-def load_config(config_file: str = '/etc/plex-metadata-generator.conf') -> Dict:
-    """Load configuration from JSON file"""
+def _default_config_path() -> str:
+    """Return a writable per-user default config path."""
+    import platform
+    system = platform.system()
+    if system == 'Darwin':
+        base = Path.home() / 'Library' / 'Application Support' / 'PlexMetadataGenerator'
+    elif system == 'Windows':
+        base = Path(os.environ.get('APPDATA', Path.home())) / 'PlexMetadataGenerator'
+    else:
+        base = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'plex-metadata-generator'
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base / 'plex-metadata-generator.conf')
+
+
+def _prompt_library_paths(config: dict, config_path: str) -> dict:
+    """Interactive first-run setup: ask for library root paths for each media type."""
+    import platform
+
+    def _pick_folder(prompt_label: str) -> Optional[str]:
+        """Native folder picker (macOS) or terminal input (other platforms)."""
+        if platform.system() == 'Darwin':
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ['osascript', '-e',
+                     f'POSIX path of (choose folder with prompt "{prompt_label}")'],
+                    capture_output=True, text=True, timeout=60
+                )
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except Exception:
+                pass
+        # Terminal fallback
+        print(f'\n  {prompt_label}')
+        path = input('  Path (or leave blank to skip): ').strip().rstrip('/')
+        return path if path else None
+
+    print('\n╔══════════════════════════════════════════════════════════╗')
+    print('║       Plex Metadata Generator — First Run Setup         ║')
+    print('╠══════════════════════════════════════════════════════════╣')
+    print('║  No configuration file found. Let\'s set one up.        ║')
+    print('║  You can edit the saved file any time to make changes.  ║')
+    print('╚══════════════════════════════════════════════════════════╝\n')
+
+    for media_key, label in [
+        ('movies', 'Movies'),
+        ('tv', 'TV Shows'),
+        ('music', 'Music'),
+    ]:
+        plural_key = f'{media_key}_library_roots'
+        singular_key = f'{media_key}_library_root'
+
+        # Already configured — skip
+        if config.get(plural_key) or config.get(singular_key):
+            continue
+
+        try:
+            answer = input(f'  Do you have a {label} library? [Y/n] ').strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            break
+
+        if answer in ('n', 'no'):
+            continue
+
+        roots: List[str] = []
+        while True:
+            verb = 'Select' if not roots else 'Add another'
+            path = _pick_folder(f'{verb} your {label} library root folder')
+            if path and os.path.isdir(path):
+                roots.append(path)
+                print(f'  ✓ Added: {path}')
+            elif path:
+                print(f'  ✗ Directory not found: {path}')
+            else:
+                break  # blank / cancelled
+
+            try:
+                more = input(f'  Add another {label} volume? [y/N] ').strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                break
+            if more not in ('y', 'yes'):
+                break
+
+        if roots:
+            config[plural_key] = roots
+
+    # Plex connection
+    if not config.get('plex', {}).get('url'):
+        print('\n  Plex server settings (optional — needed for auto-refresh):')
+        try:
+            url = input('  Plex URL [http://localhost:32400]: ').strip() or 'http://localhost:32400'
+            token = input('  Plex token (leave blank to skip): ').strip()
+        except (KeyboardInterrupt, EOFError):
+            url, token = 'http://localhost:32400', ''
+        config.setdefault('plex', {})['url'] = url
+        if token:
+            config['plex']['token'] = token
+
+    # API keys
+    key_prompts = [
+        ('tmdb',   'api_key', 'TMDB API key (movies)',    'https://www.themoviedb.org/settings/api'),
+        ('tvdb',   'api_key', 'TVDB API key (TV shows)',  'https://thetvdb.com/api-information'),
+        ('fanart_tv', 'api_key', 'FanArt.tv API key (artwork, optional)', 'https://fanart.tv/get-an-api-key/'),
+    ]
+    for section, field_name, label, url in key_prompts:
+        existing = config.get(section, {}).get(field_name, '')
+        if existing and not existing.startswith('YOUR_'):
+            continue
+        print(f'\n  {label}')
+        print(f'  Get it free at: {url}')
+        try:
+            val = input('  Key (leave blank to skip): ').strip()
+        except (KeyboardInterrupt, EOFError):
+            val = ''
+        if val:
+            config.setdefault(section, {})[field_name] = val
+
+    # Contact email for MusicBrainz
+    if not config.get('musicbrainz_contact'):
+        try:
+            email = input('\n  Your email (used in MusicBrainz User-Agent, not shared publicly): ').strip()
+        except (KeyboardInterrupt, EOFError):
+            email = ''
+        if email:
+            config['musicbrainz_contact'] = email
+
+    # Save
+    try:
+        answer = input(f'\n  Save configuration to {config_path}? [Y/n] ').strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        answer = 'y'
+    if answer in ('', 'y', 'yes'):
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            print(f'  ✓ Saved to {config_path}')
+        except Exception as e:
+            print(f'  ✗ Could not save config: {e}')
+
+    return config
+
+
+def load_config(config_file: str) -> Dict:
+    """Load configuration from JSON file; run first-run setup if file is missing."""
+    if not os.path.exists(config_file):
+        logger.info(f"Config not found at {config_file} — running first-run setup")
+        config = _prompt_library_paths({}, config_file)
+        return config
     try:
         with open(config_file, 'r') as f:
             config = json.load(f)
         logger.info(f"Loaded configuration from {config_file}")
         return config
-    except FileNotFoundError:
-        logger.error(f"Configuration file not found: {config_file}")
-        sys.exit(1)
     except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in configuration: {e}")
+        logger.error(f"Invalid JSON in configuration file {config_file}: {e}")
         sys.exit(1)
 
 
@@ -1867,8 +2027,8 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--config',
-        default='/etc/plex-metadata-generator.conf',
-        help='Configuration file path'
+        default=_default_config_path(),
+        help='Configuration file path (default: OS-appropriate user config directory)'
     )
     parser.add_argument(
         '--media-type',
@@ -1884,6 +2044,10 @@ if __name__ == '__main__':
         '--force',
         action='store_true',
         help='Overwrite existing NFO files and artwork'
+    )
+    parser.add_argument(
+        '--workers', type=int, default=1, metavar='N',
+        help='Parallel workers for movie/TV processing (default: 1; use 4 for bulk runs)'
     )
     parser.add_argument(
         '--debug',
@@ -1903,4 +2067,5 @@ if __name__ == '__main__':
 
     orchestrator = PlexMetadataOrchestrator(config)
     orchestrator.force = getattr(args, 'force', False)
+    orchestrator.workers = max(1, getattr(args, 'workers', 1))
     orchestrator.run(args.media_type, args.item)

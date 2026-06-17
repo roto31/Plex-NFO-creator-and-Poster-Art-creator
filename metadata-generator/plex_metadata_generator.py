@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 import xml.etree.ElementTree as ET
 import xml.dom.minidom
 import time
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ---------------------------------------------------------------------------
 # Logging — file handler added after permissions are known
@@ -64,6 +66,40 @@ _MULTIPART_RE = re.compile(
 def is_multipart(name: str) -> bool:
     """Return True if folder name looks like one disc/part of a multi-part set."""
     return bool(_MULTIPART_RE.search(name))
+
+
+def fuzzy_variants(title: str) -> List[str]:
+    """
+    Return progressively-cleaned title variants for fuzzy search fallback.
+    Ported from scraper.py — tries up to 6 variants until an API returns a hit.
+    """
+    seen: Set[str] = {title}
+    variants: List[str] = [title]
+
+    def _add(v: str):
+        v = v.strip()
+        if v and v not in seen:
+            seen.add(v)
+            variants.append(v)
+
+    # Strip punctuation that search engines trip on
+    _add(re.sub(r"[',:\.\-]", ' ', title).replace('  ', ' '))
+    # Remove leading article
+    _add(re.sub(r'^(The|A|An)\s+', '', title, flags=re.IGNORECASE))
+    # Move trailing ", The" / ", A" to front
+    m = re.match(r'^(.*),\s*(The|A|An)$', title, re.IGNORECASE)
+    if m:
+        _add(f"{m.group(2)} {m.group(1)}")
+    # Strip subtitle after " - " or ": "
+    _add(re.split(r'\s[-:]\s', title)[0])
+    # ASCII-fold accented characters (Amélie → Amelie, Léon → Leon)
+    ascii_ver = unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode('ascii')
+    _add(ascii_ver)
+    # ASCII-fold + strip punctuation
+    _add(unicodedata.normalize('NFKD', re.sub(r"[',:\.\-]", ' ', title))
+         .encode('ascii', 'ignore').decode('ascii').strip())
+
+    return variants
 
 
 # ---------------------------------------------------------------------------
@@ -1266,13 +1302,18 @@ class TVDbProvider:
         return {'Authorization': f'Bearer {self.bearer_token}', 'Content-Type': 'application/json'}
 
     def search_show(self, title: str) -> List[Dict]:
+        """Search TVDB with fuzzy title variant fallback. Returns first non-empty result set."""
         if not self.bearer_token:
             return []
         try:
-            resp = requests.get(f'{self.BASE_URL}/search', headers=self._headers(),
-                                params={'query': title}, timeout=10)
-            resp.raise_for_status()
-            return resp.json().get('data', [])
+            for variant in fuzzy_variants(title):
+                resp = requests.get(f'{self.BASE_URL}/search', headers=self._headers(),
+                                    params={'query': variant}, timeout=10)
+                resp.raise_for_status()
+                data = resp.json().get('data', [])
+                if data:
+                    return data
+            return []
         except requests.RequestException as e:
             logger.error(f"TVDb search failed for '{title}': {e}")
             return []
@@ -1377,8 +1418,13 @@ class TMDbProvider:
         return resp.json()
 
     def search_show(self, title: str) -> List[Dict]:
+        """Search TMDb TV with fuzzy variant fallback."""
         try:
-            return self._get('/search/tv', query=title).get('results', [])
+            for variant in fuzzy_variants(title):
+                results = self._get('/search/tv', query=variant).get('results', [])
+                if results:
+                    return results
+            return []
         except requests.RequestException as e:
             logger.error(f"TMDb TV search failed for '{title}': {e}")
             return []
@@ -1444,16 +1490,17 @@ class TMDbMovieProvider:
         return resp.json()
 
     def search_movie(self, title: str, year: Optional[int] = None) -> Optional[int]:
-        """Return TMDB ID for best match, or None. Retries without year if needed."""
+        """Return TMDB ID for best match, or None. Tries fuzzy title variants on failure."""
         try:
-            kwargs = {'query': title}
-            if year:
-                kwargs['year'] = year
-            results = self._get('/search/movie', **kwargs).get('results', [])
-            if not results and year:
-                # Retry without year
-                results = self._get('/search/movie', query=title).get('results', [])
-            return results[0]['id'] if results else None
+            for variant in fuzzy_variants(title):
+                if year:
+                    results = self._get('/search/movie', query=variant, year=year).get('results', [])
+                    if results:
+                        return results[0]['id']
+                results = self._get('/search/movie', query=variant).get('results', [])
+                if results:
+                    return results[0]['id']
+            return None
         except requests.RequestException as e:
             logger.error(f"TMDb movie search failed for '{title}': {e}")
             return None
@@ -2061,9 +2108,10 @@ _TV_SHOW_ART_FILES = ('poster.jpg', 'banner.jpg', 'fanart.jpg',
 class PlexMetadataOrchestrator:
     """Main orchestrator for metadata generation and artwork download."""
 
-    def __init__(self, config: Dict, force: bool = False):
+    def __init__(self, config: Dict, force: bool = False, workers: int = 1):
         self.config = config
         self.force = force
+        self.workers = max(1, workers)
 
         # Library roots — support list (plural) or single-path (singular) config keys
         self.tv_library_roots = self._resolve_roots(
@@ -2199,17 +2247,25 @@ class PlexMetadataOrchestrator:
             if not root.exists():
                 logger.error(f"Movie library root does not exist: {root}")
                 continue
-            logger.info(f"Scanning movie library: {root}")
-            for folder in sorted(root.iterdir()):
-                if not folder.is_dir() or folder.name.startswith('.'):
-                    continue
-                if specific_movie and folder.name != specific_movie:
-                    continue
-                if is_multipart(folder.name):
-                    logger.info(f"⏭ {folder.name} — multi-part, skipping")
-                    continue
-                self._process_one_movie(folder)
-                time.sleep(0.5)  # gentle rate limiting
+            logger.info(f"Scanning movie library: {root} ({self.workers} worker(s))")
+            folders = [
+                f for f in sorted(root.iterdir())
+                if f.is_dir() and not f.name.startswith('.')
+                and (not specific_movie or f.name == specific_movie)
+                and not is_multipart(f.name)
+            ]
+            if self.workers > 1:
+                with ThreadPoolExecutor(max_workers=self.workers) as ex:
+                    futures = {ex.submit(self._process_one_movie, f): f for f in folders}
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logger.error(f"Error processing {futures[future].name}: {e}")
+            else:
+                for folder in folders:
+                    self._process_one_movie(folder)
+                    time.sleep(0.5)
 
         if self.movies_library_key:
             self.refresh_plex_library(self.movies_library_key)
@@ -2347,14 +2403,24 @@ class PlexMetadataOrchestrator:
             if not root.exists():
                 logger.error(f"TV library root does not exist: {root}")
                 continue
-            logger.info(f"Scanning TV library: {root}")
-            for show_dir in sorted(root.iterdir()):
-                if not show_dir.is_dir() or show_dir.name.startswith('.'):
-                    continue
-                if specific_show and show_dir.name != specific_show:
-                    continue
-                self._process_one_show(show_dir)
-                time.sleep(0.5)
+            logger.info(f"Scanning TV library: {root} ({self.workers} worker(s))")
+            shows = [
+                d for d in sorted(root.iterdir())
+                if d.is_dir() and not d.name.startswith('.')
+                and (not specific_show or d.name == specific_show)
+            ]
+            if self.workers > 1:
+                with ThreadPoolExecutor(max_workers=self.workers) as ex:
+                    futures = {ex.submit(self._process_one_show, d): d for d in shows}
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logger.error(f"Error processing {futures[future].name}: {e}")
+            else:
+                for show_dir in shows:
+                    self._process_one_show(show_dir)
+                    time.sleep(0.5)
 
         self.refresh_plex_library(self.tv_library_key)
 
@@ -2619,18 +2685,32 @@ class PlexMetadataOrchestrator:
 # Config loading
 # ---------------------------------------------------------------------------
 
-def load_config(config_file: str = '/etc/plex-metadata-generator.conf') -> Dict:
+def _default_config_path() -> str:
+    """Return a writable per-user default config path (no root required)."""
+    import platform
+    system = platform.system()
+    if system == 'Darwin':
+        base = Path.home() / 'Library' / 'Application Support' / 'PlexMetadataGenerator'
+    elif system == 'Windows':
+        base = Path(os.environ.get('APPDATA', Path.home())) / 'PlexMetadataGenerator'
+    else:
+        base = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'plex-metadata-generator'
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base / 'plex-metadata-generator.conf')
+
+
+def load_config(config_file: str) -> Dict:
+    if not os.path.exists(config_file):
+        logger.info(f"Config not found at {config_file} — a blank config will be created during setup")
+        return {}
     try:
         with open(config_file) as f:
             # Strip // comments (not valid JSON but common in conf files)
             # Use negative lookbehind to avoid stripping URLs (http://, https://)
             text = re.sub(r'(?<!:)//[^\n]*', '', f.read())
             return json.loads(text)
-    except FileNotFoundError:
-        logger.error(f"Configuration file not found: {config_file}")
-        sys.exit(1)
     except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in configuration: {e}")
+        logger.error(f"Invalid JSON in configuration file {config_file}: {e}")
         sys.exit(1)
 
 
@@ -2644,8 +2724,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Plex Metadata NFO Generator — TV shows and Movies'
     )
-    parser.add_argument('--config', default='/etc/plex-metadata-generator.conf',
-                        help='Configuration file path')
+    parser.add_argument('--config', default=_default_config_path(),
+                        help='Configuration file path (default: OS-appropriate user config directory)')
     parser.add_argument('--media-type', choices=['tv', 'movies', 'all'], default='tv',
                         help='Which library to process (default: tv)')
     parser.add_argument('--show', help='Process only this TV show folder name')
@@ -2654,6 +2734,9 @@ if __name__ == '__main__':
                         help='Overwrite existing NFO files and artwork')
     parser.add_argument('--no-prompts', action='store_true',
                         help='Skip API key dialogs (for unattended/scheduled runs)')
+    parser.add_argument('--workers', type=int, default=1, metavar='N',
+                        help='Parallel workers for movie/TV processing (default: 1; '
+                             'use 4 for initial bulk runs)')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
 
     args = parser.parse_args()
@@ -2675,7 +2758,7 @@ if __name__ == '__main__':
     # Shows blocking dialogs if a key has expired, regardless of --no-prompts.
     config = revalidate_all_keys(config, args.config, cache_dir)
 
-    orchestrator = PlexMetadataOrchestrator(config, force=args.force)
+    orchestrator = PlexMetadataOrchestrator(config, force=args.force, workers=args.workers)
 
     specific = args.show or args.movie
     orchestrator.run(media_type=args.media_type, specific_item=specific)

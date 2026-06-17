@@ -131,6 +131,7 @@ python3 plex_metadata_generator.py [OPTIONS]
 | `--show NAME` | — | Process only this TV show folder |
 | `--movie NAME` | — | Process only this movie folder |
 | `--force` | off | Overwrite existing NFO and artwork |
+| `--workers N` | 1 | Parallel workers for movie/TV processing. Use `4` for initial bulk runs; leave at `1` for daily scheduled runs. |
 | `--no-prompts` | off | Skip all setup dialogs (for unattended/scheduled runs) |
 | `--debug` | off | Enable debug logging |
 
@@ -146,6 +147,7 @@ python3 plex_metadata_generator_extended.py [OPTIONS]
 | `--media-type {tv,movies,music,all}` | `all` | Which library to process |
 | `--item NAME` | — | Process only a specific show, movie, or artist |
 | `--force` | off | Overwrite existing NFO and artwork |
+| `--workers N` | 1 | Parallel workers for movie/TV/music processing |
 | `--debug` | off | Enable debug logging |
 
 ---
@@ -504,3 +506,50 @@ The generator writes to the system log at `/var/log/plex-metadata-generator.log`
 2026-06-17 02:00:03 - __main__ - INFO -   Downloaded: logo.png → /mnt/media/Movies/Back to the Future (1985)
 2026-06-17 02:00:03 - __main__ - INFO - ⏭ The Dark Knight (2008) — already complete
 ```
+
+---
+
+## Fuzzy Title Matching
+
+Both `TMDbMovieProvider.search_movie()` and `TVDbProvider.search_show()` (including the TMDb TV fallback) use `fuzzy_variants()` to try progressively-cleaned title versions when the exact folder name returns no API results.
+
+The function returns up to 6 variants in order:
+
+| Step | Example input | Example output |
+|------|--------------|---------------|
+| 1. Original | `Léon: The Professional` | `Léon: The Professional` |
+| 2. Strip punctuation | → | `Léon  The Professional` |
+| 3. Remove leading article | → | `Professional` *(no leading article here)* |
+| 4. Move trailing article | → | `The Professional` *(if ends with ", The")* |
+| 5. Strip subtitle | → | `Léon` *(after ": ")* |
+| 6. ASCII-fold | → | `Leon: The Professional` |
+| 7. ASCII-fold + strip punct | → | `Leon  The Professional` |
+
+The function stops trying at the first variant that returns a hit. This covers common mismatch causes:
+- Accented characters (`Amélie` → `Amelie`)
+- Punctuation (`It's a Wonderful Life` → `Its a Wonderful Life`)
+- Articles in different positions (`The Dark Knight` / `Dark Knight, The`)
+- Subtitles (`Batman: Mask of the Phantasm` → `Batman`)
+
+Ported from `scraper.py` where it was battle-tested against 1,700+ movie libraries.
+
+---
+
+## Parallel Processing (`--workers`)
+
+By default the generator processes one movie/show at a time (`--workers 1`). Increasing workers uses a `ThreadPoolExecutor` to process multiple folders simultaneously:
+
+```bash
+# Initial bulk pass — 4× faster for large libraries
+python3 plex_metadata_generator.py --media-type all --workers 4 --no-prompts
+
+# Daily scheduled runs — sequential is fine (most items are already complete)
+python3 plex_metadata_generator.py --media-type all --no-prompts
+```
+
+**Recommended values:**
+- `1` (default) — daily scheduled runs; most items skip immediately (already complete)
+- `4` — initial bulk pass on a library of 1,000+ items; ~4× throughput improvement
+- `> 4` — diminishing returns; API rate limits become the bottleneck
+
+Music processing is artist-parallel (one artist per worker), so `--workers 4` processes 4 artists simultaneously including all their albums and tracks.

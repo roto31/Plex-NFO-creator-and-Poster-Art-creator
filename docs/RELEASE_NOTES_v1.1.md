@@ -147,7 +147,7 @@ cp plex_metadata_generator_extended.py /usr/local/bin/plex-metadata-generator
 
 # Optionally add music
 # Edit config, add music_library_root
-# Add Spotify/MusicBrainz keys
+# Optionally configure Apple MusicKit (see MUSIC_GUIDE.md)
 # Enable music processing
 ```
 

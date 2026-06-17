@@ -7,7 +7,8 @@ graph TB
     subgraph "Input Sources"
         A1["TMDB API"]
         A2["TVDB API"]
-        A3["Spotify API"]
+        A3["iTunes Search API"]
+        A3b["Apple MusicKit<br/>(optional)"]
         A4["MusicBrainz API"]
         A5["Embedded Metadata<br/>in Video Files"]
     end
@@ -39,6 +40,7 @@ graph TB
     A2 --> B1
     A2 --> B3
     A3 --> B3
+    A3b --> B3
     A4 --> B3
     A5 --> B2
     
@@ -92,7 +94,7 @@ flowchart LR
     
     B["📚 Detect Library<br/>─────────────<br/>TV shows?<br/>Music?<br/>Both?"]
     
-    C["🔎 Query Metadata<br/>─────────────<br/>API: TMDB<br/>API: TVDB<br/>API: Spotify<br/>API: MusicBrainz"]
+    C["🔎 Query Metadata<br/>─────────────<br/>API: TMDB<br/>API: TVDB<br/>API: iTunes Search API<br/>API: Apple MusicKit<br/>API: MusicBrainz"]
     
     D["📄 Generate NFO<br/>─────────────<br/>Show/Album info<br/>Episode/Track info<br/>Download artwork<br/>Cache locally"]
     
@@ -158,7 +160,7 @@ flowchart TD
 sequenceDiagram
     actor Timer as Systemd<br/>Timer
     participant Gen as Metadata<br/>Generator
-    participant API as TMDB/TVDB/<br/>Spotify API
+    participant API as TMDB/TVDB/<br/>iTunes/MusicBrainz
     participant Cache as Local<br/>Cache
     participant FS as Filesystem<br/>NFO/JPEG
     participant Plex as Plex<br/>Server
@@ -284,11 +286,11 @@ graph TD
     
     C -->|Yes| D["✅ Use Existing<br/>─────────────<br/>Parse NFO<br/>Extract data"]
     
-    C -->|No| E["🔍 Query APIs<br/>─────────────<br/>Spotify search<br/>MusicBrainz fallback"]
+    C -->|No| E["🔍 Query APIs<br/>─────────────<br/>iTunes Search API<br/>Apple MusicKit<br/>MusicBrainz fallback"]
     
     E --> F["📥 Fetch Metadata<br/>─────────────<br/>Album title<br/>Artist name<br/>Release year<br/>Track count"]
     
-    F --> G["🖼️ Download Cover<br/>─────────────<br/>Spotify API<br/>High-res image<br/>Cache locally"]
+    F --> G["🖼️ Download Cover<br/>─────────────<br/>iTunes CDN (3000×3000)<br/>Apple MusicKit (optional)<br/>Cache locally"]
     
     G --> H["📝 Generate NFO<br/>─────────────<br/>artist.nfo<br/>album.nfo<br/>track.nfo"]
     
@@ -406,7 +408,8 @@ graph LR
     end
     
     subgraph "Music"
-        M1["Spotify<br/>Primary"]
+        M1["iTunes Search API<br/>Primary (free, no auth)"]
+        M1b["Apple MusicKit<br/>Optional upgrade"]
         M2["MusicBrainz<br/>Fallback"]
     end
     
@@ -421,7 +424,8 @@ graph LR
     T2 --> C2
     T3 --> C3
     M1 --> C1
-    M2 --> C2
+    M1b --> C2
+    M2 --> C3
     
     C1 -->|Success| D["Generate<br/>Full Metadata"]
     C2 -->|Success| D
@@ -489,7 +493,7 @@ flowchart TD
   A([Script launched]) --> B{--media-type?}
   B -- tv --> C[process_tv_library\nTVDB + TMDB + FanArt.tv]
   B -- movies --> D[process_movie_library\nTMDB + FanArt.tv]
-  B -- music --> E[process_music_library\nSpotify + MusicBrainz\nextended only]
+  B -- music --> E[process_music_library\niTunes + Apple MusicKit + MusicBrainz\nextended only]
   B -- all --> F[Run all libraries\npresent in config]
   F --> C & D & G{Extended?}
   G -- Yes --> E

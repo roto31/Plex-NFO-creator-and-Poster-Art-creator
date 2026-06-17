@@ -34,7 +34,7 @@ A suite of Python scripts that:
 **Scope:** TV shows + Music  
 **Updates:** Daily (scheduled)  
 **Integration:** Direct Plex library refresh  
-**APIs:** TVDb, TMDb, Spotify, MusicBrainz  
+**APIs:** TVDb, TMDb, iTunes Search API, Apple MusicKit (optional), MusicBrainz  
 
 ### Plex NFO Creator (scraper.py)
 
@@ -138,7 +138,8 @@ cd Plex-NFO-creator-and-Poster-Art-creator
 # Run scripts
 python3 scraper.py movies "/path/to/movies"
 python3 scraper.py tvshows "/path/to/tv"
-python3 extract_artwork.py "/path/to/videos"
+python3 extract_artwork.py movies "/path/to/movies" --extract
+python3 extract_artwork.py tvshows "/path/to/tv" --extract
 ```
 
 ### Metadata Generator
@@ -162,10 +163,10 @@ sudo systemctl enable plex-metadata-generator.timer
 
 | Feature | scraper.py | extract_artwork.py | Metadata Generator |
 |---------|-----------|-------------------|-------------------|
-| **API Integration** | TMDB, TVDB | FFmpeg extraction | TMDB, TVDB, Spotify, MusicBrainz |
+| **API Integration** | TMDB, TVDB | FFmpeg extraction | TMDB, TVDB, iTunes Search API, Apple MusicKit, MusicBrainz |
 | **Output** | NFO files | JPEG images | NFO + JPEG + auto-refresh |
 | **Scheduling** | Manual | Manual | Automatic daily |
-| **Music Support** | ❌ | ❌ | ✅ |
+| **Music Support** | ❌ | ✅ (artwork only) | ✅ (full NFO + artwork) |
 | **Plex Integration** | Direct files | Direct files | API integration |
 | **Resume/Progress** | ✅ Yes | ✅ Yes | ✅ Yes |
 | **Cross-platform** | ✅ Yes | ✅ Yes | Linux/macOS |
@@ -236,10 +237,10 @@ graph LR
 └── Music/
     ├── Artist Name/
     │   ├── artist.nfo             ← Generator only
-    │   ├── artist.jpg             ← Generator only
+    │   ├── artist.jpg             ← Generator or extract_artwork.py
     │   ├── Album Name/
     │   │   ├── album.nfo          ← Generator only
-    │   │   ├── folder.jpg         ← Generator only
+    │   │   ├── folder.jpg         ← Generator or extract_artwork.py
     │   │   └── track.nfo          ← Generator only
     │   └── ...
     └── ...
@@ -263,7 +264,7 @@ graph LR
   },
   "tvdb": { "api_key": "YOUR_KEY" },
   "tmdb": { "api_key": "YOUR_KEY" },
-  "spotify": { "client_id": "...", "client_secret": "..." }
+  "apple_musickit": { "enabled": false, "team_id": "", "key_id": "", "private_key_path": "", "storefront": "us" }
 }
 ```
 
@@ -291,8 +292,11 @@ python3 rename_movies.py "/mnt/media/Movies" --rename
 python3 scraper.py movies "/mnt/media/Movies"
 python3 scraper.py tvshows "/mnt/media/TV"
 
-# Extract artwork
-python3 extract_artwork.py "/mnt/media"
+# Extract artwork (video embedded art)
+python3 extract_artwork.py movies "/mnt/media/Movies" --extract
+python3 extract_artwork.py tvshows "/mnt/media/TV" --extract
+# Extract music embedded art (artist.jpg + folder.jpg per album)
+python3 extract_artwork.py music "/mnt/media/Music" --extract
 ```
 
 ### Step 2: Configure Metadata Generator
@@ -347,7 +351,7 @@ Settings → Libraries → Movies/TV
 ### Artwork not showing
 
 → NFO Creator: Verify extract_artwork.py ran successfully  
-→ Generator: Check Spotify/API image URLs  
+→ Generator: Check iTunes/Apple MusicKit image URLs  
 → Plex: Manual refresh of library
 
 ---
@@ -372,9 +376,10 @@ Settings → Libraries → Movies/TV
 
 ### For Music
 
-1. Metadata Generator is **required** (NFO Creator doesn't support music)
-2. Use Spotify for best results
-3. MusicBrainz as fallback
+1. Metadata Generator is **required** for music NFO files (artist/album/track metadata)
+2. `extract_artwork.py` now also handles music artwork extraction from embedded audio tags
+3. iTunes Search API is always active (free, no auth); Apple MusicKit optional for richer data
+4. MusicBrainz as fallback
 
 ### For Movies
 

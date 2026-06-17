@@ -138,10 +138,12 @@ The 75 movies and 55 TV shows that could not be matched are genuinely not in TMD
 - **[rename_movies.py Reference](rename_movies.py-Reference)**
 
 ### Metadata Generator
-- **[Metadata Generator Reference](metadata-generator-Reference)** — selective processing, movie + TV + Music support, full artwork set, scheduling
+- **[Metadata Generator Reference](metadata-generator-Reference)** — selective processing, movie + TV support, full artwork set, scheduling, subtitles, fuzzy matching, parallel workers
+- **[Extended Script Reference](plex_metadata_generator_extended-Reference)** — everything above plus Music libraries: iTunes Search API, Apple MusicKit, MusicBrainz local DB + JSON dump, artist/album/track NFOs
 
 ### Reference
-- **[Process Flow Diagrams](Diagrams)** — Mermaid flowcharts for every decision path
+- **[API Keys Guide](API-Keys)** — every API key used by this suite: what it's for, how to get it, where to put it
+- **[Process Flow Diagrams](Diagrams)** — Mermaid flowcharts for every decision path (31 diagrams including full extended-script architecture and music provider flows)
 - **[NFO Format Reference](NFO-Format-Reference)**
 - **[Plex Configuration](Plex-Configuration)**
 - **[Troubleshooting](Troubleshooting)**
