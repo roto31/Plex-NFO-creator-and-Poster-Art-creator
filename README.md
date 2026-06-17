@@ -225,7 +225,7 @@ Full documentation, Mermaid process diagrams, NFO format reference, and troubles
 | [`metadata-generator/INSTALL.md`](metadata-generator/INSTALL.md) | Detailed platform-specific install guide |
 | [`docs/INTEGRATION_GUIDE.md`](docs/INTEGRATION_GUIDE.md) | Unified workflow guide for using both tools together |
 | [`docs/WORKFLOWS_AND_DIAGRAMS.md`](docs/WORKFLOWS_AND_DIAGRAMS.md) | 13 Mermaid architecture and workflow diagrams |
-| [`docs/MUSIC_GUIDE.md`](docs/MUSIC_GUIDE.md) | Setting up Music metadata with Spotify + MusicBrainz |
+| [`docs/MUSIC_GUIDE.md`](docs/MUSIC_GUIDE.md) | Setting up Music metadata with iTunes Search API, Apple MusicKit + MusicBrainz |
 | [`docs/RELEASE_NOTES_v1.1.md`](docs/RELEASE_NOTES_v1.1.md) | v1.1 changelog |
 
 ---

@@ -260,17 +260,20 @@ Minimum working config (TV + Music):
   "tvdb":    { "api_key": "YOUR_TVDB_KEY",  "enabled": true },
   "tmdb":    { "api_key": "YOUR_TMDB_KEY",  "enabled": true },
 
-  "spotify": {
-    "client_id":     "YOUR_SPOTIFY_CLIENT_ID",
-    "client_secret": "YOUR_SPOTIFY_CLIENT_SECRET",
-    "enabled": true
+  "apple_musickit": {
+    "enabled": false,
+    "team_id": "YOUR_TEAM_ID",
+    "key_id": "YOUR_KEY_ID",
+    "private_key_path": "/path/to/AuthKey.p8",
+    "storefront": "us",
+    "skip": false
   },
 
   "musicbrainz": { "contact": "your@email.com", "enabled": true },
 
   "metadata_priority": {
     "tv":    ["tvdb", "tmdb", "tunarr"],
-    "music": ["spotify", "musicbrainz"]
+    "music": ["apple_musickit", "itunes", "musicbrainz"]
   }
 }
 ```
@@ -292,7 +295,8 @@ Or open `http://localhost:32400/web` in your browser → Developer Tools → Net
 |---|---|---|
 | TVDb | https://thetvdb.com/dashboard/account/settings/api | Free, required for TV |
 | TMDb | https://www.themoviedb.org/settings/api | Free, TV fallback |
-| Spotify | https://developer.spotify.com/dashboard | Free, music metadata |
+| iTunes Search API | No key needed | Always active — free, zero auth |
+| Apple MusicKit | https://developer.apple.com/account | Optional; requires Apple Developer account ($99/yr) |
 | MusicBrainz | No key needed | Just set `contact` to your email |
 
 ---
@@ -351,4 +355,4 @@ See `docker-compose.yml` and `Dockerfile` in the package for the full configurat
 
 ---
 
-*v1.1.0 — supports TV (TVDb/TMDb/Tunarr) and Music (Spotify/MusicBrainz)*
+*v1.1.0 — supports TV (TVDb/TMDb/Tunarr) and Music (iTunes Search API/Apple MusicKit/MusicBrainz)*
