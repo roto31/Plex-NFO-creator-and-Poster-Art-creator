@@ -751,11 +751,13 @@ class iTunesProvider:
     LOOKUP_URL  = 'https://itunes.apple.com/lookup'
     # Rate limit: Apple doesn't publish an exact number but 20 req/s is safe.
     _MIN_INTERVAL = 0.1
+    # Class-level lock so all threads share one rate-limit timer
+    _lock = threading.Lock()
+    _last_request_time: float = 0.0
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'PlexMetadataGenerator/1.0'})
-        self._last_request_time: float = 0.0
 
     # ------------------------------------------------------------------
     # Helpers
@@ -763,11 +765,11 @@ class iTunesProvider:
 
     def _get(self, url: str, params: dict) -> Optional[dict]:
         """Rate-limited GET; returns parsed JSON or None on error."""
-        import re
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self._MIN_INTERVAL:
-            time.sleep(self._MIN_INTERVAL - elapsed)
-        self._last_request_time = time.time()
+        with iTunesProvider._lock:
+            elapsed = time.time() - iTunesProvider._last_request_time
+            if elapsed < self._MIN_INTERVAL:
+                time.sleep(self._MIN_INTERVAL - elapsed)
+            iTunesProvider._last_request_time = time.time()
         try:
             resp = self.session.get(url, params=params, timeout=15)
             resp.raise_for_status()
@@ -898,6 +900,11 @@ class DiscogsProvider:
     BASE_URL   = 'https://api.discogs.com'
     _MIN_INTERVAL = 1.1   # safe floor; dynamically raised when rate limit headers say so
 
+    # Class-level lock + shared state so all threads serialize Discogs requests
+    _lock = threading.Lock()
+    _last: float = 0.0
+    _rate_limit_remaining: int = 60
+
     # Matches Discogs disambiguation suffixes: "The Beatles (2)", "Prince (3)"
     _DISAMBIG_RE = re.compile(r'\s*\(\d+\)\s*$')
 
@@ -909,26 +916,24 @@ class DiscogsProvider:
         if token:
             headers['Authorization'] = f'Discogs token={token}'
         self.session.headers.update(headers)
-        self._last: float = 0.0
-        self._rate_limit_remaining: int = 60
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
     def _get(self, url: str, params: dict = None, retries: int = 3) -> Optional[dict]:
         for attempt in range(retries):
-            elapsed = time.time() - self._last
-            if elapsed < self._MIN_INTERVAL:
-                time.sleep(self._MIN_INTERVAL - elapsed)
-            # Slow down proactively when running low on quota
-            if self._rate_limit_remaining < 5:
-                time.sleep(3.0)
-            self._last = time.time()
+            with DiscogsProvider._lock:
+                elapsed = time.time() - DiscogsProvider._last
+                if elapsed < self._MIN_INTERVAL:
+                    time.sleep(self._MIN_INTERVAL - elapsed)
+                if DiscogsProvider._rate_limit_remaining < 5:
+                    time.sleep(3.0)
+                DiscogsProvider._last = time.time()
             try:
                 resp = self.session.get(url, params=params or {}, timeout=15)
                 # Track remaining quota from response headers
                 remaining = resp.headers.get('X-Discogs-Ratelimit-Remaining')
                 if remaining is not None:
-                    self._rate_limit_remaining = int(remaining)
+                    DiscogsProvider._rate_limit_remaining = int(remaining)
                 if resp.status_code == 429:
                     wait = 60 / max(1, int(resp.headers.get('X-Discogs-Ratelimit', 60)))
                     logger.warning(f"Discogs rate limit hit — waiting {wait:.0f}s (attempt {attempt+1}/{retries})")
