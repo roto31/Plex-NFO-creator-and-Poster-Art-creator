@@ -140,10 +140,10 @@ class MusicBrainzProvider:
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': user_agent})
 
-    def _get(self, url: str, params: dict, retries: int = 4) -> requests.Response:
-        """Rate-limited GET with exponential backoff on 503.
+    def _get(self, url: str, params: dict, retries: int = 5) -> requests.Response:
+        """Rate-limited GET with exponential backoff on 503 and connection errors.
         Class-level lock ensures only one request fires at a time across all threads."""
-        import time
+        last_exc = None
         for attempt in range(retries):
             with MusicBrainzProvider._lock:
                 elapsed = time.time() - MusicBrainzProvider._last_request_time
@@ -152,8 +152,15 @@ class MusicBrainzProvider:
                 MusicBrainzProvider._last_request_time = time.time()
                 try:
                     resp = self.session.get(url, params=params, timeout=15)
-                except Exception:
-                    raise
+                except (requests.exceptions.SSLError,
+                        requests.exceptions.ConnectionError,
+                        requests.exceptions.Timeout) as exc:
+                    last_exc = exc
+                    wait = 2 ** attempt
+                    logger.warning(f"MusicBrainz connection error — retrying in {wait}s "
+                                   f"(attempt {attempt+1}/{retries}): {exc}")
+                    time.sleep(wait)
+                    continue
             if resp.status_code == 503:
                 wait = 2 ** attempt
                 logger.warning(f"MusicBrainz 503 — retrying in {wait}s (attempt {attempt+1}/{retries})")
@@ -161,6 +168,8 @@ class MusicBrainzProvider:
                 continue
             resp.raise_for_status()
             return resp
+        if last_exc:
+            raise last_exc
         resp.raise_for_status()
         return resp
 
