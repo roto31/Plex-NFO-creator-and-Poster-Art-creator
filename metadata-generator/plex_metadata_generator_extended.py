@@ -1658,6 +1658,19 @@ class PlexMetadataOrchestrator:
         # Search metadata and generate NFO files
         pass
     
+    def _download_image(self, url: str, dest: Path):
+        """Download an image, using the Discogs authenticated session for i.discogs.com URLs."""
+        if 'discogs.com' in url and self.discogs:
+            try:
+                resp = self.discogs.session.get(url, timeout=20)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+                logger.info(f"  Downloaded: {dest.name}")
+            except Exception as e:
+                logger.error(f"Failed to download {dest.name}: {e}")
+        else:
+            self.downloader.download_image(url, dest)
+
     def _process_music_artist(self, artist_path: Path):
         """Process artist directory with albums"""
         artist_name = artist_path.name
@@ -1766,7 +1779,7 @@ class PlexMetadataOrchestrator:
             if first_audio and self._extract_embedded_artwork(first_audio, artist_img_path):
                 logger.info(f"  ✓ Extracted artist.jpg from embedded artwork ({first_audio.name})")
             elif artist_metadata.image_url:
-                self.downloader.download_image(artist_metadata.image_url, artist_img_path)
+                self._download_image(artist_metadata.image_url, artist_img_path)
         
         # Process albums in this artist directory (parallel when workers > 1)
         album_dirs = sorted(
@@ -1912,7 +1925,7 @@ class PlexMetadataOrchestrator:
             if first_audio and self._extract_embedded_artwork(first_audio, cover_path):
                 logger.info(f"  ✓ Extracted album cover from embedded artwork ({first_audio.name})")
             elif album_metadata.cover_url:
-                self.downloader.download_image(album_metadata.cover_url, cover_path)
+                self._download_image(album_metadata.cover_url, cover_path)
         
         # Process individual tracks
         self._process_album_tracks(album_path, album_metadata, artist_metadata)
