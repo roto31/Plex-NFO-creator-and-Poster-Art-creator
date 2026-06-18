@@ -1590,49 +1590,60 @@ class PlexMetadataOrchestrator:
 
         logger.info(f"Processing music artist: {artist_name}")
         
-        # Search for artist metadata — priority: iTunes → MusicKit → local MB PG → local MB JSON
+        # Search for artist metadata — priority: iTunes → MusicKit → local MB PG → local MB JSON → Discogs
+        # Each provider is tried with progressively fuzzy name variants before moving to the next.
         artist_metadata = None
+        artist_variants = _music_fuzzy_variants(artist_name)
 
         # 1. iTunes Search API (free, no auth, no rate limits, always available)
         if not artist_metadata and self.itunes:
-            results = self.itunes.search_artist(artist_name)
-            if results:
-                artist_metadata = self.itunes.build_artist_metadata(results[0])
-                logger.info(f"Found artist '{artist_name}' via iTunes")
+            for variant in artist_variants:
+                results = self.itunes.search_artist(variant)
+                if results:
+                    artist_metadata = self.itunes.build_artist_metadata(results[0])
+                    logger.info(f"Found artist '{artist_name}' via iTunes" +
+                                (f" (as '{variant}')" if variant != artist_name else ""))
+                    break
 
         # 2. Apple MusicKit API (rich artwork + genres; requires Developer account)
         if not artist_metadata and self.musickit:
-            results = self.musickit.search_artist(artist_name)
-            if results:
-                artist_metadata = self.musickit.build_artist_metadata(results[0])
-                logger.info(f"Found artist '{artist_name}' via Apple MusicKit")
+            for variant in artist_variants:
+                results = self.musickit.search_artist(variant)
+                if results:
+                    artist_metadata = self.musickit.build_artist_metadata(results[0])
+                    logger.info(f"Found artist '{artist_name}' via Apple MusicKit" +
+                                (f" (as '{variant}')" if variant != artist_name else ""))
+                    break
 
         # 3. Local MusicBrainz PostgreSQL DB (if installed)
         if not artist_metadata and self.mb_local and self.mb_local.available:
-            results = self.mb_local.search_artist(artist_name)
-            if results:
-                artist_metadata = ArtistMetadata(
-                    name=results[0]['name'],
-                    mbid=results[0]['id'],
-                )
-                logger.info(f"Found artist '{artist_name}' in local MusicBrainz DB")
+            for variant in artist_variants:
+                results = self.mb_local.search_artist(variant)
+                if results:
+                    artist_metadata = ArtistMetadata(name=results[0]['name'], mbid=results[0]['id'])
+                    logger.info(f"Found artist '{artist_name}' in local MusicBrainz DB" +
+                                (f" (as '{variant}')" if variant != artist_name else ""))
+                    break
 
         # 4. Local MusicBrainz JSON dump (if installed)
         if not artist_metadata and self.mb_json and self.mb_json.available:
-            results = self.mb_json.search_artist(artist_name)
-            if results:
-                artist_metadata = ArtistMetadata(
-                    name=results[0]['name'],
-                    mbid=results[0]['id'],
-                )
-                logger.info(f"Found artist '{artist_name}' in local MusicBrainz JSON dump")
+            for variant in artist_variants:
+                results = self.mb_json.search_artist(variant)
+                if results:
+                    artist_metadata = ArtistMetadata(name=results[0]['name'], mbid=results[0]['id'])
+                    logger.info(f"Found artist '{artist_name}' in local MusicBrainz JSON dump" +
+                                (f" (as '{variant}')" if variant != artist_name else ""))
+                    break
 
         # 5. Discogs (high-res physical media artwork; best for vinyl/older releases)
         if not artist_metadata and self.discogs:
-            results = self.discogs.search_artist(artist_name)
-            if results:
-                artist_metadata = self.discogs.build_artist_metadata(results[0])
-                logger.info(f"Found artist '{artist_name}' via Discogs")
+            for variant in artist_variants:
+                results = self.discogs.search_artist(variant)
+                if results:
+                    artist_metadata = self.discogs.build_artist_metadata(results[0])
+                    logger.info(f"Found artist '{artist_name}' via Discogs" +
+                                (f" (as '{variant}')" if variant != artist_name else ""))
+                    break
         
         if not artist_metadata:
             # Create basic metadata
@@ -1696,52 +1707,88 @@ class PlexMetadataOrchestrator:
 
         logger.info(f"Processing album: {album_name} by {artist_name}")
         
-        # Search for album metadata — priority: iTunes → MusicKit → local MB PG → local MB JSON
+        # Search for album metadata — priority: iTunes → MusicKit → local MB PG → local MB JSON → Discogs
+        # Both album name and artist name are fuzzied independently for maximum match coverage.
         album_metadata = None
+        album_variants  = _music_fuzzy_variants(album_name)
+        artist_variants = _music_fuzzy_variants(artist_name)
 
         # 1. iTunes Search API (free, no auth, no rate limits, always available)
         if not album_metadata and self.itunes:
-            results = self.itunes.search_album(album_name, artist_name)
-            if results:
-                collection_id = results[0].get('collectionId', '')
-                album_metadata = self.itunes.get_album(collection_id)
+            for a_var in album_variants:
+                for ar_var in artist_variants:
+                    results = self.itunes.search_album(a_var, ar_var)
+                    if results:
+                        collection_id = results[0].get('collectionId', '')
+                        album_metadata = self.itunes.get_album(collection_id)
+                        if album_metadata:
+                            logger.info(f"Found album '{album_name}' via iTunes" +
+                                        (f" (as '{a_var}' / '{ar_var}')"
+                                         if a_var != album_name or ar_var != artist_name else ""))
+                            break
                 if album_metadata:
-                    logger.info(f"Found album '{album_name}' via iTunes")
+                    break
 
         # 2. Apple MusicKit API (high-res artwork + full metadata; requires Developer account)
         if not album_metadata and self.musickit:
-            results = self.musickit.search_album(album_name, artist_name)
-            if results:
-                apple_id = results[0].get('id', '')
-                album_metadata = self.musickit.get_album(apple_id)
+            for a_var in album_variants:
+                for ar_var in artist_variants:
+                    results = self.musickit.search_album(a_var, ar_var)
+                    if results:
+                        apple_id = results[0].get('id', '')
+                        album_metadata = self.musickit.get_album(apple_id)
+                        if album_metadata:
+                            logger.info(f"Found album '{album_name}' via Apple MusicKit" +
+                                        (f" (as '{a_var}' / '{ar_var}')"
+                                         if a_var != album_name or ar_var != artist_name else ""))
+                            break
                 if album_metadata:
-                    logger.info(f"Found album '{album_name}' via Apple MusicKit")
+                    break
 
         # 3. Local MusicBrainz PostgreSQL DB (if installed)
         if not album_metadata and self.mb_local and self.mb_local.available:
-            results = self.mb_local.search_release(album_name, artist_name)
-            if results:
-                mbid = results[0]['id']
-                album_metadata = self.mb_local.get_release(mbid)
+            for a_var in album_variants:
+                for ar_var in artist_variants:
+                    results = self.mb_local.search_release(a_var, ar_var)
+                    if results:
+                        mbid = results[0]['id']
+                        album_metadata = self.mb_local.get_release(mbid)
+                        if album_metadata:
+                            logger.info(f"Found album '{album_name}' in local MusicBrainz DB" +
+                                        (f" (as '{a_var}')" if a_var != album_name else ""))
+                            break
                 if album_metadata:
-                    logger.info(f"Found album '{album_name}' in local MusicBrainz DB")
+                    break
 
         # 4. Local MusicBrainz JSON dump (if installed)
         if not album_metadata and self.mb_json and self.mb_json.available:
-            results = self.mb_json.search_release(album_name, artist_name)
-            if results:
-                mbid = results[0]['id']
-                album_metadata = self.mb_json.get_release(mbid)
+            for a_var in album_variants:
+                for ar_var in artist_variants:
+                    results = self.mb_json.search_release(a_var, ar_var)
+                    if results:
+                        mbid = results[0]['id']
+                        album_metadata = self.mb_json.get_release(mbid)
+                        if album_metadata:
+                            logger.info(f"Found album '{album_name}' in local MusicBrainz JSON dump" +
+                                        (f" (as '{a_var}')" if a_var != album_name else ""))
+                            break
                 if album_metadata:
-                    logger.info(f"Found album '{album_name}' in local MusicBrainz JSON dump")
+                    break
 
         # 5. Discogs (high-res physical media artwork; best for vinyl/older releases)
         if not album_metadata and self.discogs:
-            results = self.discogs.search_album(album_name, artist_name)
-            if results:
-                album_metadata = self.discogs.get_album(results[0])
+            for a_var in album_variants:
+                for ar_var in artist_variants:
+                    results = self.discogs.search_album(a_var, ar_var)
+                    if results:
+                        album_metadata = self.discogs.get_album(results[0])
+                        if album_metadata:
+                            logger.info(f"Found album '{album_name}' via Discogs" +
+                                        (f" (as '{a_var}' / '{ar_var}')"
+                                         if a_var != album_name or ar_var != artist_name else ""))
+                            break
                 if album_metadata:
-                    logger.info(f"Found album '{album_name}' via Discogs")
+                    break
         
         if not album_metadata:
             # Create basic metadata
@@ -2156,6 +2203,47 @@ def _default_cache_dir() -> str:
         base = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'plex-metadata-generator'
     base.mkdir(parents=True, exist_ok=True)
     return str(base)
+
+
+def _music_fuzzy_variants(name: str) -> List[str]:
+    """
+    Return progressively-cleaned name variants for music artist/album search.
+    Extends the base fuzzy_variants() with music-specific patterns.
+    """
+    seen: set = {name}
+    variants: List[str] = [name]
+
+    def _add(v: str):
+        v = v.strip()
+        if v and v not in seen:
+            seen.add(v)
+            variants.append(v)
+
+    # Strip punctuation
+    _add(re.sub(r"[',:\.\-!&]", ' ', name).replace('  ', ' ').strip())
+    # Remove leading article
+    _add(re.sub(r'^(The|A|An)\s+', '', name, flags=re.IGNORECASE))
+    # Move trailing ", The" / ", A" to front
+    m = re.match(r'^(.*),\s*(The|A|An)$', name, re.IGNORECASE)
+    if m:
+        _add(f"{m.group(2)} {m.group(1)}")
+    # Strip disc/volume/part suffix: "Album Name (Disc 1)", "Album (Vol. 2)"
+    _add(re.sub(r'\s*[\(\[](Disc|Disk|Vol\.?|Volume|Part|Pt\.?)\s*\d+[\)\]]',
+                '', name, flags=re.IGNORECASE).strip())
+    # Strip year in parens: "Album Name (2005)"
+    _add(re.sub(r'\s*\(\d{4}\)\s*$', '', name).strip())
+    # Strip subtitle after " - " or ": "
+    _add(re.split(r'\s[-:]\s', name)[0])
+    # Strip "featuring"/"feat."/"ft." and everything after
+    _add(re.split(r'\s+(feat(?:uring)?|ft)[\.\s]', name, flags=re.IGNORECASE)[0].strip())
+    # ASCII-fold accented characters
+    ascii_ver = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')
+    _add(ascii_ver)
+    # ASCII-fold + strip punctuation
+    _add(unicodedata.normalize('NFKD', re.sub(r"[',:\.\-!&]", ' ', name))
+         .encode('ascii', 'ignore').decode('ascii').strip())
+
+    return [v for v in variants if v]
 
 
 def _default_mb_json_dir() -> str:
