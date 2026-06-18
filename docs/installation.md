@@ -1,50 +1,41 @@
-# Installation — Plex NFO Creator (macOS)
-
-Install the **native macOS app** from GitHub Releases. This public repository does **not** contain application source code.
+# Installation — Python CLI scripts
 
 ## Download
 
 1. Open [GitHub Releases](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/releases)
-2. Download **`Plex NFO Creator-<version>-macos.dmg`** (or similarly named DMG for your version)
-3. Optional: verify SHA-256 using `release/<tag>/checksums.sha256` in this repo after sync
+2. Download **`Plex-NFO-Scripts-<version>.zip`**
+3. Unzip to a folder of your choice
 
-## Install
+Script source is **not** in the public git repository — only in release zip assets.
 
-1. Double-click the DMG to mount it
-2. Drag **Plex NFO Creator** to **Applications**
-3. Eject the DMG
-4. Launch from Applications
+## Setup
 
-First launch opens the **setup wizard** for TMDB and TVDB API keys (stored in macOS Keychain).
+```bash
+unzip Plex-NFO-Scripts-*.zip -d ~/PlexNFO-Scripts
+cd ~/PlexNFO-Scripts
+```
+
+Read **`SCRIPT_USAGE.md`** inside the zip, or [docs/script-usage.md](script-usage.md) in this repo.
 
 ## Requirements
 
 | Requirement | Notes |
 |-------------|-------|
-| macOS 14+ | Sonoma or later |
-| TMDB + TVDB API keys | Free accounts — see [Wiki: API Keys](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/API-Keys) |
-| ffmpeg | Optional; required for Artwork extraction |
-| Library folder access | Write access to your media libraries |
+| Python 3.8+ | macOS, Linux, or Windows |
+| TMDB + TVDB keys | [Wiki: API Keys](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/API-Keys) |
+| ffmpeg | Artwork extraction only |
+| `requests` | Metadata Generator: `pip install requests` |
 
-## Verify the download (optional)
-
-After mounting the DMG:
+## First run
 
 ```bash
-spctl -a -vvv -t install "/Volumes/Plex NFO Creator/Plex NFO Creator.app"
+python3 scraper.py movies "/path/to/Movies"
 ```
 
-A notarized build shows `accepted` and `source=Notarized Developer ID`.
-
-## Python CLI scripts
-
-**Script source is not published in this repository.** For how the Python tools work (scraper, artwork extraction, metadata generator), see the [GitHub Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki).
-
-For the supported distribution model, see [distribution-policy.md](distribution-policy.md).
+Preflight checks run automatically (Python version, API keys, optional ffmpeg).
 
 ## More help
 
-- [Getting started](getting-started.md)
-- [Build & release info](build-and-release.md)
+- [Script usage guide](script-usage.md)
+- [Wiki: Installation](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Installation)
 - [Wiki: Troubleshooting](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Troubleshooting)
-- [Native macOS App wiki hub](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Native-macOS-App-Home)

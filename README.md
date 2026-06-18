@@ -1,49 +1,42 @@
-# Plex NFO Creator & Poster Art Extractor
+# Plex NFO Creator — Python CLI
 
-**Plex NFO Creator** generates Plex-compatible `.nfo` metadata sidecars and extracts embedded poster artwork from your local media library. Use the **native macOS app** for a tabbed GUI, or the **Python CLI** for headless and cross-platform batch jobs.
+**Plex NFO Creator** generates Plex-compatible `.nfo` metadata sidecars and extracts embedded poster artwork from your local media library.
 
-## Download (macOS app)
+## Download scripts
 
 Install from [GitHub Releases](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/releases):
 
-1. Download `Plex NFO Creator-<version>-macos.dmg` for your tagged version
-2. Open the DMG and drag **Plex NFO Creator** to Applications
-3. On first launch, complete the wizard and save TMDB/TVDB keys to Keychain
+1. Download **`Plex-NFO-Scripts-<version>.zip`**
+2. Unzip anywhere on your machine
+3. Read **`SCRIPT_USAGE.md`** inside the zip (also mirrored at [docs/script-usage.md](docs/script-usage.md))
 
-Verify the SHA-256 checksum in `release/<tag>/checksums.sha256` before installing.
+> **Script source is not in this git repository.** Releases attach the zip; the repo holds **documentation only**.
 
-> **Source code** is maintained in a private repository. This public repo ships **documentation and release binaries only**.
+## Quick start
 
-## Quick start (native app)
+```bash
+unzip Plex-NFO-Scripts-*.zip -d ~/PlexNFO-Scripts && cd ~/PlexNFO-Scripts
+# Edit scraper.py API keys, then:
+python3 scraper.py movies "/path/to/Movies"
+```
 
-1. Launch **Plex NFO Creator**
-2. Enter **TMDB** and **TVDB** API keys in the first-launch wizard (stored in Keychain)
-3. Set library roots for Movies and TV Shows
-4. Use **Rename** → **Scraper** → **Artwork** → **Metadata** → **Health Check** as needed
+Full guide: [docs/script-usage.md](docs/script-usage.md)
 
-See [Getting Started](docs/getting-started.md), [Installation](docs/installation.md), and the [Native macOS App wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Native-macOS-App-Home).
+## Documentation
 
-## Python CLI
+| Resource | Link |
+|----------|------|
+| **Script usage** | [docs/script-usage.md](docs/script-usage.md) |
+| **GitHub Wiki** | [wiki home](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki) |
+| **Installation (wiki)** | [Installation](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Installation) |
+| **Troubleshooting** | [Troubleshooting](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Troubleshooting) |
+| **Distribution policy** | [docs/distribution-policy.md](docs/distribution-policy.md) |
+| **Changelog** | [CHANGELOG.md](CHANGELOG.md) |
 
-**Script source is not published** in this repository. Plain `.py` files in a public git repo can always be copied; the supported model is documentation plus signed release binaries only.
+## Requirements
 
-| Need | Where |
-|------|--------|
-| How the CLI works | [GitHub Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki) |
-| Runnable macOS GUI | [GitHub Releases](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/releases) (signed DMG) |
-| Distribution policy | [docs/distribution-policy.md](docs/distribution-policy.md) |
+Python 3.8+, TMDB/TVDB API keys, ffmpeg (artwork only), `pip install requests` (metadata-generator only).
 
-Future CLI builds (if offered) would ship as **compiled release artifacts**, not readable source in git.
+## Native macOS app
 
-## Requirements (native app)
-
-| Requirement | Notes |
-|-------------|-------|
-| macOS | 14 (Sonoma) or later |
-| API keys | Free TMDB and TVDB accounts |
-| ffmpeg | Optional; required for Artwork tab |
-| Library access | Write access to media folders |
-
-## License
-
-See repository license file. Third-party API use (TMDB, TVDB, etc.) is subject to each provider's terms.
+The SwiftUI GUI is built from a **private source repository** and is not published on this Releases page. This public project distributes the **Python CLI scripts** and documentation.
