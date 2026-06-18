@@ -2110,7 +2110,7 @@ class MetadataDownloader:
 _MOVIE_ART_FILES = ('poster.jpg', 'folder.jpg', 'backdrop.jpg',
                     'clearart.png', 'disc.png', 'logo.png')
 _TV_SHOW_ART_FILES = ('poster.jpg', 'banner.jpg', 'fanart.jpg',
-                      'clearart.png', 'logo.png', 'landscape.jpg')
+                      'clearart.png', 'logo.png', 'landscape.jpg', 'theme.mp3')
 
 
 class PlexMetadataOrchestrator:
@@ -2484,6 +2484,10 @@ class PlexMetadataOrchestrator:
                                     ('landscape.jpg', 'landscape_url')]:
                     if fname in fanart_need and fa.get(key):
                         self.dl.download_image(fa[key], show_dir / fname)
+
+            # Theme music — Plex reads theme.mp3 from the show root folder
+            if 'theme.mp3' in missing_art and meta.tvdb_id:
+                self._download_theme(meta.tvdb_id, show_dir / 'theme.mp3')
         else:
             logger.debug(f"⏭ {show_dir.name} — show level complete")
 
@@ -2578,6 +2582,20 @@ class PlexMetadataOrchestrator:
 
             # Process episodes
             self._process_episodes(season_dir, show_meta, season_num, show_imdb_id)
+
+    def _download_theme(self, tvdb_id: int, dest: Path):
+        """Download theme.mp3 from Plex's theme CDN (keyed by TVDB ID)."""
+        url = f"https://tvthemes.plexapp.com/{tvdb_id}.mp3"
+        try:
+            resp = requests.get(url, timeout=20)
+            if resp.status_code == 404:
+                logger.debug(f"  No theme music available for TVDB {tvdb_id}")
+                return
+            resp.raise_for_status()
+            dest.write_bytes(resp.content)
+            logger.info(f"  ✓ Downloaded theme.mp3 ({len(resp.content) // 1024} KB)")
+        except requests.RequestException as e:
+            logger.warning(f"  Failed to download theme.mp3: {e}")
 
     def _download_season_poster(self, season_dir: Path, tvdb_id: int, season_num: int):
         try:
