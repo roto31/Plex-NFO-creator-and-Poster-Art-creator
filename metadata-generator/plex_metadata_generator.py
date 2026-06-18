@@ -1387,7 +1387,11 @@ class TVDbProvider:
             )
             resp.raise_for_status()
             episodes = []
-            for ep in resp.json().get('data', []):
+            payload = resp.json().get('data', [])
+            # TVDB v4 /episodes/default?season=N wraps results in data.episodes
+            if isinstance(payload, dict):
+                payload = payload.get('episodes', [])
+            for ep in payload:
                 if not isinstance(ep, dict):
                     continue
                 num = ep.get('number')
@@ -2525,6 +2529,14 @@ class PlexMetadataOrchestrator:
                 self._write_plexmatch_show(show_dir, meta)
             else:
                 self._backfill_plexmatch_from_nfo(show_dir, nfo_path, 'show')
+
+        # If show root was already complete (meta never fetched), still need show metadata
+        # for episode NFO + thumbnail lookups.  Load it from the existing NFO's TVDB ID.
+        if meta is None and nfo_path.exists():
+            tvdb_id = self._extract_tvdb_id_from_nfo(nfo_path)
+            if tvdb_id and self.tvdb:
+                logger.debug(f"  Loading show metadata for episode processing (TVDB {tvdb_id})")
+                meta = self.tvdb.get_show(tvdb_id)
 
         # Resolve show IMDb ID for subtitle lookups (from metadata or existing NFO)
         show_imdb_id: Optional[str] = None
