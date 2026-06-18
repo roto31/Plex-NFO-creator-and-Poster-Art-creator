@@ -9,16 +9,18 @@ Install macOS builds from [GitHub Releases](https://github.com/roto31/Plex-NFO-c
 ## Documentation
 
 - [Docs index](docs/README.md)
-- [Native macOS app — getting started](docs/getting-started.md)
+- [Installation](docs/installation.md)
+- [Getting started](docs/getting-started.md)
+- [Build & release](docs/build-and-release.md)
 - [Distribution policy](docs/distribution-policy.md)
 
 ---
 
 ## [Unreleased]
 
-### Build/CI
+### Docs
 
-- Private source repository (`Plex-NFO-Artwork-Creator`) publishes release artifacts and sanitized docs to this public repository.
+- Public allowlist sync documentation; [distribution-policy.md](docs/distribution-policy.md), [installation.md](docs/installation.md).
 
 ---
 

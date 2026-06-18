@@ -1,14 +1,37 @@
-# Documentation — Plex NFO Creator
+# Documentation — Plex NFO Creator (public)
 
-User-facing documentation for **Plex NFO Creator**. Install builds from [GitHub Releases](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/releases).
+This is the **public distribution** repository. It contains consumer documentation and release checksum metadata only — **no application or script source code**.
 
-## Native macOS app
+## Install the macOS app
 
-| Topic | Document |
-|-------|----------|
-| Getting started | [getting-started.md](getting-started.md) |
-| Build & release | [build-and-release.md](build-and-release.md) |
+| Step | Document |
+|------|----------|
+| Download DMG, drag to Applications | [installation.md](installation.md) |
+| First launch, API keys, workflow | [getting-started.md](getting-started.md) |
+| Releases, versioning, channels | [build-and-release.md](build-and-release.md) |
+
+**Releases:** https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/releases
+
+## What is (and is not) in this repo
+
+| Included | Not included |
+|----------|--------------|
+| README, CHANGELOG, docs | Swift / SwiftUI source |
+| `release/<tag>/` checksums | Python `.py` scripts |
+| GitHub Releases DMG binaries | Private CI secrets |
+
+Details: [distribution-policy.md](distribution-policy.md)
 
 ## Wiki (full reference)
 
-The [GitHub Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki) includes Python CLI references, NFO format, Plex agent configuration, troubleshooting, and extended native app pages.
+The [GitHub Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki) documents Python CLI behavior, NFO format, Plex agent setup, troubleshooting, and extended native app pages — without publishing proprietary source in git.
+
+Suggested starting points:
+
+- [Installation (wiki)](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Installation)
+- [Native macOS App home](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Native-macOS-App-Home)
+- [FAQ](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/FAQ)
+
+## Changelog
+
+See [CHANGELOG.md](../CHANGELOG.md) in the repo root.

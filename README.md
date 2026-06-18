@@ -21,7 +21,7 @@ Verify the SHA-256 checksum in `release/<tag>/checksums.sha256` before installin
 3. Set library roots for Movies and TV Shows
 4. Use **Rename** → **Scraper** → **Artwork** → **Metadata** → **Health Check** as needed
 
-See [Getting Started](docs/getting-started.md) and the [Native macOS App wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Native-macOS-App-Home).
+See [Getting Started](docs/getting-started.md), [Installation](docs/installation.md), and the [Native macOS App wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Native-macOS-App-Home).
 
 ## Python CLI
 
