@@ -1365,8 +1365,14 @@ class TVDbProvider:
                     meta.fanart_url = _tvdb_img(image['image'])
                     break
             return meta
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                logger.debug(f"TVDb show {tvdb_id} not found (deleted/invalid ID) — trying next provider")
+            else:
+                logger.warning(f"TVDb show {tvdb_id} error: {e}")
+            return None
         except requests.RequestException as e:
-            logger.error(f"Failed to fetch TVDb show {tvdb_id}: {e}")
+            logger.warning(f"TVDb show {tvdb_id} request failed: {e}")
             return None
 
     def get_episodes(self, tvdb_id: int, season: int) -> List[EpisodeMetadata]:
