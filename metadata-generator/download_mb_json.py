@@ -68,7 +68,7 @@ def _list_latest_dump() -> tuple[str, list[str]]:
     with urllib.request.urlopen(BASE_URL, timeout=30) as r:
         html = r.read().decode()
     p = _LinkParser()
-    p.parse(html)
+    p.feed(html)
     # Entries look like "20250601-001425/" — pick the last one
     date_dirs = sorted(l for l in p.links if l[:4].isdigit())
     if not date_dirs:
