@@ -1296,16 +1296,15 @@ class PlexMetadataOrchestrator:
             else:
                 logger.warning("Local MusicBrainz DB configured but unreachable — trying JSON dump next")
 
-        # Local MusicBrainz JSON dump (optional; used if PostgreSQL provider unavailable)
+        # Local MusicBrainz JSON dump — auto-detected from default path, no config needed
         self.mb_json: Optional[LocalJsonMusicBrainzProvider] = None
-        if self.mb_local is None:
-            json_dump_dir = config.get('musicbrainz_json_dump_dir', '')
-            if json_dump_dir:
-                json_provider = LocalJsonMusicBrainzProvider(json_dump_dir)
-                if json_provider.connect():
-                    self.mb_json = json_provider
-                else:
-                    logger.warning("MusicBrainz JSON dump configured but unavailable — falling back to REST API")
+        _mb_json_default = _default_mb_json_dir()
+        json_dump_dir = config.get('musicbrainz_json_dump_dir', '') or _mb_json_default
+        if json_dump_dir and Path(json_dump_dir).exists():
+            json_provider = LocalJsonMusicBrainzProvider(json_dump_dir)
+            if json_provider.connect():
+                self.mb_json = json_provider
+                logger.info(f"MusicBrainz JSON dump loaded from {json_dump_dir}")
 
         # MusicBrainz REST API (no key required, just user-agent)
         self.musicbrainz = MusicBrainzProvider(
@@ -2013,6 +2012,19 @@ def _default_cache_dir() -> str:
     else:
         base = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'plex-metadata-generator'
     base.mkdir(parents=True, exist_ok=True)
+    return str(base)
+
+
+def _default_mb_json_dir() -> str:
+    """Return the default path where the MusicBrainz JSON dump is stored."""
+    import platform
+    system = platform.system()
+    if system == 'Darwin':
+        base = Path.home() / 'Library' / 'Application Support' / 'PlexMetadataGenerator' / 'mb-json'
+    elif system == 'Windows':
+        base = Path(os.environ.get('APPDATA', Path.home())) / 'PlexMetadataGenerator' / 'mb-json'
+    else:
+        base = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local' / 'share')) / 'plex-metadata-generator' / 'mb-json'
     return str(base)
 
 
