@@ -4,13 +4,13 @@ All notable **Plex NFO Creator** release changes are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-Install macOS builds from [GitHub Releases](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/releases). Application source is not published in this repository.
+Install Python CLI scripts from [GitHub Releases](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/releases) (`Plex-NFO-Scripts-<version>.zip`). Script source is not published in this git repository — see [script-usage.md](docs/script-usage.md).
 
 ## Documentation
 
 - [Docs index](docs/README.md)
+- [Script usage](docs/script-usage.md)
 - [Installation](docs/installation.md)
-- [Getting started](docs/getting-started.md)
 - [Build & release](docs/build-and-release.md)
 - [Distribution policy](docs/distribution-policy.md)
 
@@ -18,9 +18,18 @@ Install macOS builds from [GitHub Releases](https://github.com/roto31/Plex-NFO-c
 
 ## [Unreleased]
 
+---
+
+## [2.5.0] - 2026-06-18
+
+### Changed
+
+- **Public Releases scrubbed** — removed all legacy DMG/app releases (v0.1.0–v2.4.0). Releases now ship **Python CLI scripts only** as `Plex-NFO-Scripts-2.5.0.zip`.
+- **Distribution model** — public git holds documentation only; runnable scripts attach to GitHub Releases. See [distribution-policy.md](docs/distribution-policy.md) and [script-usage.md](docs/script-usage.md).
+
 ### Docs
 
-- Public allowlist sync documentation; [distribution-policy.md](docs/distribution-policy.md), [installation.md](docs/installation.md).
+- [script-usage.md](docs/script-usage.md), updated [installation.md](docs/installation.md), [build-and-release.md](docs/build-and-release.md), [distribution-policy.md](docs/distribution-policy.md).
 
 ---
 
@@ -28,10 +37,9 @@ Install macOS builds from [GitHub Releases](https://github.com/roto31/Plex-NFO-c
 
 ### Added
 
-- **Native macOS app (M0)** — SwiftUI app with Rename, Scraper, Artwork, Metadata, and Health Check tabs; Keychain-backed API keys; `PlexNFOCore` library (macOS 14+).
 - **Python CLI suite** — documented on [Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki): `scraper.py`, `extract_artwork.py`, `rename_movies.py`, `preflight.py`, and Metadata Generator scripts.
-- GitHub Wiki with installation, troubleshooting, NFO format reference, and native app documentation.
+- GitHub Wiki with installation, troubleshooting, and NFO format reference.
 
-### Build/CI
+### Removed (superseded by 2.5.0 policy)
 
-- Signed, notarized macOS DMG (`Plex NFO Creator-<version>-macos.dmg`) published via private-repo tag workflow.
+- Native macOS DMG releases are no longer published on this public Releases page.
