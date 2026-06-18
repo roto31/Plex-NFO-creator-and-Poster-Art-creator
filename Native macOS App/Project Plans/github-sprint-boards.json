@@ -1,0 +1,117 @@
+{
+  "master": {
+    "number": 2,
+    "url": "https://github.com/users/roto31/projects/2",
+    "kanban_view": "https://github.com/users/roto31/projects/2/views/7",
+    "roadmap_view": "https://github.com/users/roto31/projects/2/views/4",
+    "sprint_field_id": "PVTSSF_lAHOAtu8xc4Ba-alzhVyRrw"
+  },
+  "sprint_boards": [
+    {
+      "number": 4,
+      "id": "PVT_kwHOAtu8xc4Ba-ii",
+      "title": "Plex NFO Native \u2014 Sprint 01: Repo & CI Foundation",
+      "sprint": 1,
+      "url": "https://github.com/users/roto31/projects/4"
+    },
+    {
+      "number": 5,
+      "id": "PVT_kwHOAtu8xc4Ba-in",
+      "title": "Plex NFO Native \u2014 Sprint 02: Core Services Bootstrap",
+      "sprint": 2,
+      "url": "https://github.com/users/roto31/projects/5"
+    },
+    {
+      "number": 6,
+      "id": "PVT_kwHOAtu8xc4Ba-iq",
+      "title": "Plex NFO Native \u2014 Sprint 03: Job Runner & Secrets",
+      "sprint": 3,
+      "url": "https://github.com/users/roto31/projects/6"
+    },
+    {
+      "number": 7,
+      "id": "PVT_kwHOAtu8xc4Ba-ir",
+      "title": "Plex NFO Native \u2014 Sprint 04: Spikes & Fixtures",
+      "sprint": 4,
+      "url": "https://github.com/users/roto31/projects/7"
+    },
+    {
+      "number": 8,
+      "id": "PVT_kwHOAtu8xc4Ba-iu",
+      "title": "Plex NFO Native \u2014 Sprint 05: Rename Module",
+      "sprint": 5,
+      "url": "https://github.com/users/roto31/projects/8"
+    },
+    {
+      "number": 9,
+      "id": "PVT_kwHOAtu8xc4Ba-iw",
+      "title": "Plex NFO Native \u2014 Sprint 06: Scraper HTTP Layer",
+      "sprint": 6,
+      "url": "https://github.com/users/roto31/projects/9"
+    },
+    {
+      "number": 10,
+      "id": "PVT_kwHOAtu8xc4Ba-iy",
+      "title": "Plex NFO Native \u2014 Sprint 07: Scraper NFO Generation",
+      "sprint": 7,
+      "url": "https://github.com/users/roto31/projects/10"
+    },
+    {
+      "number": 11,
+      "id": "PVT_kwHOAtu8xc4Ba-i4",
+      "title": "Plex NFO Native \u2014 Sprint 08: Scraper Tab Complete",
+      "sprint": 8,
+      "url": "https://github.com/users/roto31/projects/11"
+    },
+    {
+      "number": 12,
+      "id": "PVT_kwHOAtu8xc4Ba-i9",
+      "title": "Plex NFO Native \u2014 Sprint 09: Artwork Extraction Core",
+      "sprint": 9,
+      "url": "https://github.com/users/roto31/projects/12"
+    },
+    {
+      "number": 13,
+      "id": "PVT_kwHOAtu8xc4Ba-jC",
+      "title": "Plex NFO Native \u2014 Sprint 10: Artwork Tab Complete",
+      "sprint": 10,
+      "url": "https://github.com/users/roto31/projects/13"
+    },
+    {
+      "number": 14,
+      "id": "PVT_kwHOAtu8xc4Ba-jG",
+      "title": "Plex NFO Native \u2014 Sprint 11: Settings & First Launch",
+      "sprint": 11,
+      "url": "https://github.com/users/roto31/projects/14"
+    },
+    {
+      "number": 15,
+      "id": "PVT_kwHOAtu8xc4Ba-jM",
+      "title": "Plex NFO Native \u2014 Sprint 12: Metadata Generator Base",
+      "sprint": 12,
+      "url": "https://github.com/users/roto31/projects/15"
+    },
+    {
+      "number": 16,
+      "id": "PVT_kwHOAtu8xc4Ba-jQ",
+      "title": "Plex NFO Native \u2014 Sprint 13: Metadata Generator Extended",
+      "sprint": 13,
+      "url": "https://github.com/users/roto31/projects/16"
+    },
+    {
+      "number": 17,
+      "id": "PVT_kwHOAtu8xc4Ba-jW",
+      "title": "Plex NFO Native \u2014 Sprint 14: Health Check & Scheduling",
+      "sprint": 14,
+      "url": "https://github.com/users/roto31/projects/17"
+    },
+    {
+      "number": 18,
+      "id": "PVT_kwHOAtu8xc4Ba-jZ",
+      "title": "Plex NFO Native \u2014 Sprint 15: Release 1.0.0",
+      "sprint": 15,
+      "url": "https://github.com/users/roto31/projects/18"
+    }
+  ],
+  "view_setup_note": "Sprint Kanban (view 7): Column by Sprint — configured in GitHub UI. View 1 (Backlog) keeps Status columns. Roadmap view 4: ensure Start date / Target date columns visible."
+}

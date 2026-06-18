@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<tvshow>
+  <title>Fixture Show</title>
+  <originaltitle>Fixture Show</originaltitle>
+  <year>2020</year>
+  <plot>Fixture plot</plot>
+  <rating>8.5</rating>
+  <runtime>45</runtime>
+  <status>Continuing</status>
+  <uniqueid type="tvdb" default="true">80348</uniqueid>
+  <uniqueid type="tmdb" default="false">1396</uniqueid>
+  <uniqueid type="imdb" default="false">tt0903747</uniqueid>
+  <genre>Drama</genre>
+  <genre>Crime</genre>
+</tvshow>

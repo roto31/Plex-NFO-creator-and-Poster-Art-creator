@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<movie>
+  <title>Test Movie</title>
+  <year>2020</year>
+  <tmdbid>42</tmdbid>
+  <plot>A fixture plot.</plot>
+</movie>

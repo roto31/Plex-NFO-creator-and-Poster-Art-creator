@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<movie>
+  <title>Fixture Movie</title>
+  <originaltitle>Fixture Movie</originaltitle>
+  <year>2010</year>
+  <plot>Movie plot</plot>
+  <rating>8.8</rating>
+  <runtime>148</runtime>
+  <genre>Action</genre>
+  <uniqueid type="tmdb" default="true">27205</uniqueid>
+  <uniqueid type="imdb" default="false">tt1375666</uniqueid>
+</movie>
