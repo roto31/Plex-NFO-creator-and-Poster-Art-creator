@@ -81,7 +81,7 @@ def _list_latest_dump() -> tuple[str, list[str]]:
     with urllib.request.urlopen(latest_url, timeout=30) as r:
         html = r.read().decode()
     p2 = _LinkParser()
-    p2.parse(html)
+    p2.feed(html)
     tarballs = [l for l in p2.links if l.endswith('.tar.bz2')
                 and any(l.startswith(w) for w in WANTED_DUMPS)]
     return latest_url, tarballs
