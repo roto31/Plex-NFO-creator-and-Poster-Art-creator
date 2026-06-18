@@ -2234,6 +2234,18 @@ class PlexMetadataOrchestrator:
         return None
 
     @staticmethod
+    def _extract_tvdb_id_from_nfo(nfo_path: Path) -> Optional[int]:
+        """Parse existing tvshow.nfo for <uniqueid type="tvdb"> — fallback when folder name search fails."""
+        try:
+            tree = ET.parse(nfo_path)
+            for uid in tree.findall('uniqueid'):
+                if uid.get('type') in ('tvdb', 'tvdbid') and uid.text:
+                    return int(uid.text.strip())
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     def _find_video_file(folder: Path) -> Optional[Path]:
         """Return the primary video file in a folder (largest file wins when ambiguous)."""
         exts = {'.mp4', '.m4v', '.mkv', '.avi', '.mov'}
@@ -2453,6 +2465,13 @@ class PlexMetadataOrchestrator:
         if needs_nfo or missing_art:
             logger.info(f"Processing show: {show_dir.name}")
             meta = self._find_show_metadata(show_dir.name)
+            # If name-based search failed but tvshow.nfo already has a TVDB ID,
+            # look up by ID directly (handles folders with generic names like "Converted").
+            if not meta and not needs_nfo and nfo_path.exists():
+                tvdb_id = self._extract_tvdb_id_from_nfo(nfo_path)
+                if tvdb_id and self.tvdb:
+                    logger.info(f"  ↩ Falling back to TVDB ID {tvdb_id} from existing tvshow.nfo")
+                    meta = self.tvdb.get_show(tvdb_id)
             if not meta:
                 logger.warning(f"  ❌ Could not find metadata for: {show_dir.name}")
                 return
