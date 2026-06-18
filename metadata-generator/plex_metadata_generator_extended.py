@@ -1874,6 +1874,20 @@ def _default_config_path() -> str:
     return str(base / 'plex-metadata-generator.conf')
 
 
+def _default_cache_dir() -> str:
+    """Return a writable per-user cache directory (no root required)."""
+    import platform
+    system = platform.system()
+    if system == 'Darwin':
+        base = Path.home() / 'Library' / 'Caches' / 'PlexMetadataGenerator'
+    elif system == 'Windows':
+        base = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'PlexMetadataGenerator' / 'Cache'
+    else:
+        base = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'plex-metadata-generator'
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base)
+
+
 def _prompt_library_paths(config: dict, config_path: str) -> dict:
     """Interactive first-run setup: ask for library root paths for each media type."""
     import platform

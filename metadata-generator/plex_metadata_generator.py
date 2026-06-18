@@ -997,7 +997,9 @@ def _save_validation_state(cache_dir: str, state: dict):
 
 
 def revalidate_all_keys(config: dict, config_path: str,
-                        cache_dir: str = '/var/cache/plex-metadata') -> dict:
+                        cache_dir: Optional[str] = None) -> dict:
+    if cache_dir is None:
+        cache_dir = _default_cache_dir()
     """
     Check whether 15 days have passed since the last API key validation.
     If so, test every configured key against its live API. For any key that
@@ -2068,8 +2070,8 @@ class MetadataDownloader:
 
     MIN_VALID_BYTES = 1000   # Same threshold as extract_artwork.py
 
-    def __init__(self, cache_dir: str = '/var/cache/plex-metadata'):
-        self.cache_dir = Path(cache_dir)
+    def __init__(self, cache_dir: Optional[str] = None):
+        self.cache_dir = Path(cache_dir) if cache_dir else Path(_default_cache_dir())
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def download_image(self, url: str, dest: Path, force: bool = False) -> bool:
@@ -2149,7 +2151,7 @@ class PlexMetadataOrchestrator:
         )
 
         self.nfo = PlexNFOGenerator()
-        self.dl = MetadataDownloader(config.get('cache_dir', '/var/cache/plex-metadata'))
+        self.dl = MetadataDownloader(config.get('cache_dir') or None)
 
         if self.fanart is None:
             logger.warning("fanart_tv.api_key not configured — clearart, disc, and logo artwork will be skipped")
@@ -2699,6 +2701,20 @@ def _default_config_path() -> str:
     return str(base / 'plex-metadata-generator.conf')
 
 
+def _default_cache_dir() -> str:
+    """Return a writable per-user cache directory (no root required)."""
+    import platform
+    system = platform.system()
+    if system == 'Darwin':
+        base = Path.home() / 'Library' / 'Caches' / 'PlexMetadataGenerator'
+    elif system == 'Windows':
+        base = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'PlexMetadataGenerator' / 'Cache'
+    else:
+        base = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'plex-metadata-generator'
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base)
+
+
 def load_config(config_file: str) -> Dict:
     if not os.path.exists(config_file):
         logger.info(f"Config not found at {config_file} — a blank config will be created during setup")
@@ -2745,7 +2761,7 @@ if __name__ == '__main__':
         logging.getLogger().setLevel(logging.DEBUG)
 
     config = load_config(args.config)
-    cache_dir = config.get('cache_dir', '/var/cache/plex-metadata')
+    cache_dir = config.get('cache_dir') or _default_cache_dir()
 
     if not args.no_prompts:
         config = prompt_missing_library_paths(config, args.config)
