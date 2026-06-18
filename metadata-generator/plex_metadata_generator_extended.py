@@ -883,6 +883,128 @@ except ImportError:
     _CRYPTOGRAPHY_AVAILABLE = False
 
 
+class DiscogsProvider:
+    """
+    Fetch music metadata and artwork from the Discogs database.
+
+    Works without an API key (25 req/min). With a free personal access token
+    from discogs.com/settings/developers the limit rises to 60 req/min.
+
+    Artwork: user-scanned physical media — often 5000×5000+ and superior to
+    iTunes for vinyl, older albums, imports, classical and jazz releases.
+    """
+
+    SEARCH_URL = 'https://api.discogs.com/database/search'
+    BASE_URL   = 'https://api.discogs.com'
+    _MIN_INTERVAL = 1.1   # 60 req/min with token → ~1 req/sec to stay safe
+
+    def __init__(self, token: str = ''):
+        self.token = token
+        self.session = requests.Session()
+        ua = 'PlexMetadataGenerator/1.0 +https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator'
+        headers = {'User-Agent': ua}
+        if token:
+            headers['Authorization'] = f'Discogs token={token}'
+        self.session.headers.update(headers)
+        self._last: float = 0.0
+
+    def _get(self, url: str, params: dict = None) -> Optional[dict]:
+        elapsed = time.time() - self._last
+        if elapsed < self._MIN_INTERVAL:
+            time.sleep(self._MIN_INTERVAL - elapsed)
+        self._last = time.time()
+        try:
+            resp = self.session.get(url, params=params or {}, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.debug(f"Discogs request failed: {e}")
+            return None
+
+    # ── Artist ────────────────────────────────────────────────────────────
+
+    def search_artist(self, artist_name: str) -> List[Dict]:
+        data = self._get(self.SEARCH_URL, {'q': artist_name, 'type': 'artist', 'per_page': 5})
+        return data.get('results', []) if data else []
+
+    def build_artist_metadata(self, result: dict) -> 'ArtistMetadata':
+        artist_id = result.get('id')
+        image_url = None
+
+        if artist_id:
+            detail = self._get(f'{self.BASE_URL}/artists/{artist_id}')
+            if detail:
+                images = detail.get('images', [])
+                primary = next((i for i in images if i.get('type') == 'primary'), None)
+                image_url = (primary or (images[0] if images else {})).get('uri')
+
+        return ArtistMetadata(
+            name=result.get('title', ''),
+            image_url=image_url,
+        )
+
+    # ── Album ─────────────────────────────────────────────────────────────
+
+    def search_album(self, album_title: str, artist_name: str) -> List[Dict]:
+        data = self._get(self.SEARCH_URL, {
+            'release_title': album_title,
+            'artist': artist_name,
+            'type': 'master',
+            'per_page': 5,
+        })
+        results = data.get('results', []) if data else []
+        # Fall back to release search if no master found
+        if not results:
+            data = self._get(self.SEARCH_URL, {
+                'release_title': album_title,
+                'artist': artist_name,
+                'type': 'release',
+                'per_page': 5,
+            })
+            results = data.get('results', []) if data else []
+        return results
+
+    def get_album(self, result: dict) -> Optional['AlbumMetadata']:
+        resource_url = result.get('resource_url') or result.get('master_url')
+        if not resource_url:
+            return None
+        detail = self._get(resource_url)
+        if not detail:
+            return None
+
+        # Artwork — prefer primary image, fall back to first available
+        images = detail.get('images', [])
+        primary = next((i for i in images if i.get('type') == 'primary'), None)
+        cover_url = (primary or (images[0] if images else {})).get('uri')
+
+        artists = [a.get('name', '') for a in detail.get('artists', [])]
+        genres = detail.get('genres', []) + detail.get('styles', [])
+        tracklist = []
+        for t in detail.get('tracklist', []):
+            if t.get('type_') == 'track':
+                tracklist.append(TrackMetadata(
+                    title=t.get('title', ''),
+                    track_number=len(tracklist) + 1,
+                    disc_number=1,
+                    duration=0,
+                ))
+
+        label_info = detail.get('labels', [{}])
+        label = label_info[0].get('name', '') if label_info else ''
+
+        return AlbumMetadata(
+            title=detail.get('title', result.get('title', '')),
+            artist=artists[0] if artists else '',
+            year=int(detail.get('year', 0) or 0),
+            genres=genres[:3],
+            label=label,
+            cover_url=cover_url,
+            tracks=tracklist,
+            plot=detail.get('notes', ''),
+            rating=0.0,
+        )
+
+
 class AppleMusicKitProvider:
     """
     Fetch music metadata from the Apple MusicKit API.
@@ -1332,6 +1454,12 @@ class PlexMetadataOrchestrator:
             else:
                 logger.warning("Apple MusicKit credentials configured but token generation failed — falling back to iTunes")
         
+        # Discogs — works without a token (25 req/min); token gives 60 req/min
+        # Free personal token: https://www.discogs.com/settings/developers
+        discogs_token = config.get('discogs', {}).get('token', '')
+        self.discogs = DiscogsProvider(token=discogs_token)
+        logger.info("Discogs provider ready" + (" (authenticated)" if discogs_token else " (unauthenticated — 25 req/min)"))
+
         # TV providers (from previous implementation)
         from plex_metadata_generator import TVDbProvider, TMDbProvider, TunarrMetadataProvider, MetadataDownloader
         
@@ -1498,6 +1626,13 @@ class PlexMetadataOrchestrator:
                     mbid=results[0]['id'],
                 )
                 logger.info(f"Found artist '{artist_name}' in local MusicBrainz JSON dump")
+
+        # 5. Discogs (high-res physical media artwork; best for vinyl/older releases)
+        if not artist_metadata and self.discogs:
+            results = self.discogs.search_artist(artist_name)
+            if results:
+                artist_metadata = self.discogs.build_artist_metadata(results[0])
+                logger.info(f"Found artist '{artist_name}' via Discogs")
         
         if not artist_metadata:
             # Create basic metadata
@@ -1599,6 +1734,14 @@ class PlexMetadataOrchestrator:
                 album_metadata = self.mb_json.get_release(mbid)
                 if album_metadata:
                     logger.info(f"Found album '{album_name}' in local MusicBrainz JSON dump")
+
+        # 5. Discogs (high-res physical media artwork; best for vinyl/older releases)
+        if not album_metadata and self.discogs:
+            results = self.discogs.search_album(album_name, artist_name)
+            if results:
+                album_metadata = self.discogs.get_album(results[0])
+                if album_metadata:
+                    logger.info(f"Found album '{album_name}' via Discogs")
         
         if not album_metadata:
             # Create basic metadata
