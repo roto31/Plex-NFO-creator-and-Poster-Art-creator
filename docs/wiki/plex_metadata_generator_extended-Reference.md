@@ -42,17 +42,16 @@ python3 plex_metadata_generator_extended.py [OPTIONS]
 | `--item NAME` | — | Process only the named show, movie, or artist folder |
 | `--force` | off | Regenerate all NFOs and artwork even if already present |
 | `--workers N` | `1` | Parallel workers. Up to `16` is safe (all providers use class-level thread locks). Use `4`–`8` for initial bulk runs; `1` for daily scheduled runs. |
-| `--no-prompts` | off | Skip all first-run dialogs — for unattended/scheduled runs |
 | `--debug` | off | Verbose per-item logging |
 
 ### Examples
 
 ```bash
 # Process everything (recommended for daily scheduled use)
-python3 plex_metadata_generator_extended.py --media-type all --no-prompts
+python3 plex_metadata_generator_extended.py --media-type all
 
 # Initial bulk pass with parallel workers (up to 16 safe)
-python3 plex_metadata_generator_extended.py --media-type all --workers 8 --no-prompts
+python3 plex_metadata_generator_extended.py --media-type all --workers 8
 
 # Music library only
 python3 plex_metadata_generator_extended.py --media-type music
@@ -60,8 +59,11 @@ python3 plex_metadata_generator_extended.py --media-type music
 # One artist only
 python3 plex_metadata_generator_extended.py --media-type music --item "Pink Floyd"
 
+# Music with max workers
+python3 plex_metadata_generator_extended.py --media-type music --workers 16
+
 # Force regenerate everything
-python3 plex_metadata_generator_extended.py --media-type all --force --no-prompts
+python3 plex_metadata_generator_extended.py --media-type all --force
 ```
 
 ---
@@ -496,18 +498,18 @@ On first run (or when required config is missing), native OS dialogs guide you t
 3. **Scan mode** — force full rescan vs. selective (skip already-complete items)
 4. **Save to config** — writes all entered values back to the config file so subsequent runs are silent
 
-For scheduled/unattended runs, pass `--no-prompts`. The 15-day API key revalidation check is the **only dialog that bypasses `--no-prompts`** — an expired key would cause silent failures, so the user must intervene.
+The extended script has no `--no-prompts` flag — it runs unattended by default when all required config keys are present.
 
 ---
 
 ## Parallel Processing (`--workers N`)
 
 ```bash
-# Initial bulk run — ~4× throughput
-python3 plex_metadata_generator_extended.py --workers 4 --media-type all --no-prompts
+# Initial bulk run — high throughput
+python3 plex_metadata_generator_extended.py --workers 8 --media-type all
 
 # Daily scheduled run — sequential (most items are already complete)
-python3 plex_metadata_generator_extended.py --media-type all --no-prompts
+python3 plex_metadata_generator_extended.py --media-type all
 ```
 
 | Workers | Best for | Notes |
