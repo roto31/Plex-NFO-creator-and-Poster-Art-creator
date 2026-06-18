@@ -2756,7 +2756,8 @@ class PlexMetadataOrchestrator:
 
     @staticmethod
     def _extract_season_number(folder_name: str) -> Optional[int]:
-        m = re.search(r'[Ss]eason\s*(\d+)|[Ss](\d{2})', folder_name)
+        # Match "Season 1", "Season 01", "S01", "S1" — in that priority order
+        m = re.search(r'[Ss]eason\s*(\d+)|[Ss](\d{1,2})(?!\w)', folder_name)
         if m:
             return int(m.group(1) or m.group(2))
         return None
@@ -2890,6 +2891,192 @@ class PlexMetadataOrchestrator:
 
 
 # ---------------------------------------------------------------------------
+# Season organizer — moves flat-structured episodes into Season subdirectories
+# ---------------------------------------------------------------------------
+
+# Show-level files that must stay in the root; never moved into Season folders.
+_SHOW_ROOT_FILES = frozenset({
+    'tvshow.nfo', 'poster.jpg', 'folder.jpg', 'banner.jpg', 'fanart.jpg',
+    'backdrop.jpg', 'clearart.png', 'logo.png', 'landscape.jpg', 'disc.png',
+    'theme.mp3', '.plexmatch',
+})
+_VIDEO_EXTS = frozenset({'.mp4', '.m4v', '.mkv', '.avi', '.mov', '.wmv', '.ts', '.mpg', '.mpeg'})
+_SIDECAR_SUFFIXES = (
+    '.nfo',
+    '-thumb.jpg',
+    '-thumb.png',
+)
+_SEASON_RE = re.compile(r'[Ss](\d{1,2})[Ee]\d{1,3}')
+
+
+def organize_seasons_folder(folder: Path, dry_run: bool = True) -> dict:
+    """
+    Move video files (and their per-episode sidecars) from a flat show folder
+    into Season subdirectories.  Show-level artwork/NFO files stay in the root.
+
+    Returns a summary dict:
+        {'moves': [(src, dst), ...], 'skipped': [str, ...], 'errors': [str, ...]}
+
+    When dry_run=True nothing is touched; when dry_run=False files are moved.
+    """
+    result: dict = {'moves': [], 'skipped': [], 'errors': []}
+
+    if not folder.is_dir():
+        result['errors'].append(f"Not a directory: {folder}")
+        return result
+
+    # Collect video files directly in the show root (not in subdirs)
+    flat_videos = [
+        f for f in folder.iterdir()
+        if f.is_file() and f.suffix.lower() in _VIDEO_EXTS
+    ]
+
+    if not flat_videos:
+        result['skipped'].append(f"{folder.name}: no flat video files found")
+        return result
+
+    for video in sorted(flat_videos):
+        m = _SEASON_RE.search(video.name)
+        if not m:
+            result['skipped'].append(f"  {video.name} — no S##E## pattern, skipping")
+            continue
+
+        season_num = int(m.group(1))
+        season_dir = folder / f"Season {season_num:02d}"
+
+        # Plan the video move
+        dst_video = season_dir / video.name
+        result['moves'].append((video, dst_video))
+
+        # Plan sidecar moves: same stem + each sidecar suffix
+        stem = video.stem
+        for suf in _SIDECAR_SUFFIXES:
+            candidate = folder / (stem + suf)
+            if candidate.exists():
+                result['moves'].append((candidate, season_dir / (stem + suf)))
+
+        # Also move subtitle sidecars: {stem}.{lang}.srt
+        for srt in folder.glob(f"{stem}.*.srt"):
+            result['moves'].append((srt, season_dir / srt.name))
+
+    if not dry_run:
+        # Execute the moves
+        created_dirs: set = set()
+        for src, dst in result['moves']:
+            if not src.exists():
+                result['errors'].append(f"  Source gone before move: {src.name}")
+                continue
+            if dst.parent not in created_dirs:
+                try:
+                    dst.parent.mkdir(exist_ok=True)
+                    created_dirs.add(dst.parent)
+                except OSError as e:
+                    result['errors'].append(f"  Cannot create {dst.parent.name}: {e}")
+                    continue
+            try:
+                shutil.move(str(src), str(dst))
+            except OSError as e:
+                result['errors'].append(f"  Move failed {src.name} → {dst.parent.name}: {e}")
+
+    return result
+
+
+_SHORT_SEASON_RE = re.compile(r'^[Ss](\d{1,2})$')
+
+
+def rename_season_folders(folder: Path, dry_run: bool = True) -> List[tuple]:
+    """
+    Rename short-form season folders (S1, S2, s01…) to Plex-canonical
+    'Season 01', 'Season 02'… form.  Returns list of (old, new) Path tuples.
+    """
+    renames = []
+    for child in folder.iterdir():
+        if not child.is_dir():
+            continue
+        m = _SHORT_SEASON_RE.match(child.name)
+        if not m:
+            continue
+        num = int(m.group(1))
+        canonical = folder / f"Season {num:02d}"
+        if canonical == child:
+            continue  # already correct name (e.g. 'S01' → 'Season 01' would differ)
+        if not canonical.exists():
+            renames.append((child, canonical))
+    if not dry_run:
+        for src, dst in renames:
+            try:
+                src.rename(dst)
+            except OSError as e:
+                logger.error(f"  Could not rename {src.name} → {dst.name}: {e}")
+    return renames
+
+
+def organize_seasons_library(roots: List[Path], specific_show: str = None,
+                             dry_run: bool = True) -> None:
+    """
+    Walk all configured TV library roots and organise any show that has video
+    files directly in its root folder.  If specific_show is set, only that
+    folder name is processed.
+    """
+    mode = "DRY RUN — " if dry_run else ""
+    logger.info(f"{'=' * 60}")
+    logger.info(f"Season Organizer — {mode}{'preview only, pass --force to execute' if dry_run else 'moving files'}")
+    logger.info(f"{'=' * 60}")
+
+    total_moves = 0
+    for root in roots:
+        if not root.is_dir():
+            logger.warning(f"Library root not found: {root}")
+            continue
+        shows = sorted(d for d in root.iterdir()
+                       if d.is_dir() and not d.name.startswith('.')
+                       and (not specific_show or d.name == specific_show))
+        for show_dir in shows:
+            # Rename short-form season folders (S1 → Season 01) first
+            renames = rename_season_folders(show_dir, dry_run=dry_run)
+            if renames:
+                logger.info(f"\n🏷  {show_dir.name} — season folder rename(s):")
+                for src, dst in renames:
+                    action = "would rename" if dry_run else "renamed"
+                    logger.info(f"  {action}: {src.name}  →  {dst.name}")
+            result = organize_seasons_folder(show_dir, dry_run=dry_run)
+            if not result['moves'] and not result['errors']:
+                if result['skipped']:
+                    logger.debug(f"⏭ {show_dir.name} — {result['skipped'][0].strip()}")
+                continue
+            if result['moves']:
+                logger.info(f"\n{'📋' if dry_run else '📁'} {show_dir.name}")
+                season_groups: dict = {}
+                for src, dst in result['moves']:
+                    key = dst.parent.name
+                    season_groups.setdefault(key, []).append((src, dst))
+                for season, moves in sorted(season_groups.items()):
+                    videos = [s for s, d in moves if s.suffix.lower() in _VIDEO_EXTS]
+                    sidecars = [s for s, d in moves if s.suffix.lower() not in _VIDEO_EXTS]
+                    logger.info(f"  → {season}: {len(videos)} video(s), {len(sidecars)} sidecar(s)")
+                    if dry_run:
+                        for src, dst in moves[:3]:
+                            logger.info(f"      {src.name}")
+                        if len(moves) > 3:
+                            logger.info(f"      … and {len(moves) - 3} more")
+                total_moves += len(result['moves'])
+            for err in result['errors']:
+                logger.error(err)
+
+    if dry_run and total_moves:
+        logger.info(f"\n{'=' * 60}")
+        logger.info(f"DRY RUN complete — {total_moves} file move(s) planned.")
+        logger.info("Re-run with --force to execute the moves.")
+        logger.info(f"{'=' * 60}")
+    elif not dry_run:
+        logger.info(f"\n{'=' * 60}")
+        logger.info(f"Season organizer complete — {total_moves} file(s) moved.")
+        logger.info(f"{'=' * 60}")
+    elif not total_moves:
+        logger.info("No flat-structured shows found — all shows already use Season folders.")
+
+
+# ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
 
@@ -2963,6 +3150,15 @@ if __name__ == '__main__':
     parser.add_argument('--plex-scan', action='store_true',
                         help='After processing, force a full Plex folder scan + metadata re-match '
                              'so .plexmatch IDs and new files are picked up immediately')
+    parser.add_argument('--organize-seasons', action='store_true',
+                        help='Sort flat video files into Season ## subdirectories. '
+                             'Defaults to dry-run preview; add --force to actually move files. '
+                             'Use --path to target a single show folder, or --show to target '
+                             'a show by name within the configured TV library root(s).')
+    parser.add_argument('--path', metavar='DIR',
+                        help='Absolute path to a single show (or movie) folder to process. '
+                             'Used with --organize-seasons to target a folder outside the '
+                             'configured library roots.')
 
     args = parser.parse_args()
 
@@ -2983,6 +3179,45 @@ if __name__ == '__main__':
     config = revalidate_all_keys(config, args.config, cache_dir)
 
     orchestrator = PlexMetadataOrchestrator(config, force=args.force, workers=args.workers)
+
+    if args.organize_seasons:
+        # Season organizer — separate action, does not run metadata generation
+        dry_run = not args.force
+        if args.path:
+            target = Path(args.path)
+            mode = "DRY RUN — " if dry_run else ""
+            logger.info(f"{'=' * 60}")
+            logger.info(f"Season Organizer — {mode}{target.name}")
+            logger.info(f"{'=' * 60}")
+            # Step 1: rename short-form season folders
+            renames = rename_season_folders(target, dry_run=dry_run)
+            if renames:
+                logger.info("Season folder renames:")
+                for src, dst in renames:
+                    action = "would rename" if dry_run else "renamed"
+                    logger.info(f"  {action}: {src.name}  →  {dst.name}")
+            # Step 2: move flat video files into Season dirs
+            result = organize_seasons_folder(target, dry_run=dry_run)
+            if result['moves']:
+                for src, dst in result['moves']:
+                    action = "would move" if dry_run else "moved"
+                    logger.info(f"  {action}: {src.name}  →  {dst.parent.name}/")
+            elif not renames:
+                logger.info("  Nothing to do — season folders already correct.")
+            for s in result['skipped']:
+                logger.info(f"  ⏭ {s}")
+            for e in result['errors']:
+                logger.error(f"  ❌ {e}")
+            total = len(renames) + len(result['moves'])
+            if dry_run and total:
+                logger.info(f"\nRe-run with --force to execute {total} operation(s).")
+        else:
+            organize_seasons_library(
+                orchestrator.tv_library_roots,
+                specific_show=args.show,
+                dry_run=dry_run,
+            )
+        sys.exit(0)
 
     specific = args.show or args.movie
     orchestrator.run(media_type=args.media_type, specific_item=specific)
