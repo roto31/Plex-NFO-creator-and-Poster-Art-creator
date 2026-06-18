@@ -128,8 +128,8 @@ class MusicBrainzProvider:
     """Fetch metadata from MusicBrainz API"""
 
     BASE_URL = 'https://musicbrainz.org/ws/2'
-    # MusicBrainz policy: max 1 req/sec; back off on 503
-    _MIN_INTERVAL = 1.1
+    # MusicBrainz policy: max 1 req/sec; use 2s to stay well clear of the limit
+    _MIN_INTERVAL = 2.0
 
     # Class-level lock + timestamp shared across ALL instances and threads
     _lock = threading.Lock()
@@ -156,7 +156,7 @@ class MusicBrainzProvider:
                         requests.exceptions.ConnectionError,
                         requests.exceptions.Timeout) as exc:
                     last_exc = exc
-                    wait = 2 ** attempt
+                    wait = 4 * (2 ** attempt)  # 4s, 8s, 16s, 32s, 64s
                     logger.warning(f"MusicBrainz connection error — retrying in {wait}s "
                                    f"(attempt {attempt+1}/{retries}): {exc}")
                     time.sleep(wait)
