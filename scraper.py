@@ -168,6 +168,27 @@ def write_nfo(path, root):
     with open(path, "w", encoding="utf-8") as f:
         f.write(pretty_xml(root))
 
+
+def write_plexmatch(folder_path, title, year=None, tvdb_id=None, tmdb_id=None, imdb_id=None):
+    """Write .plexmatch only if missing — tells Plex the exact TVDB/TMDB ID to use."""
+    dest = os.path.join(folder_path, '.plexmatch')
+    if os.path.exists(dest):
+        return
+    lines = [f"title: {title}"]
+    if year:
+        lines.append(f"year: {year}")
+    if tvdb_id:
+        lines.append(f"tvdbId: {tvdb_id}")
+    if tmdb_id:
+        lines.append(f"tmdbId: {tmdb_id}")
+    if imdb_id:
+        lines.append(f"imdbId: {imdb_id}")
+    try:
+        with open(dest, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines) + '\n')
+    except IOError:
+        pass
+
 # ─── Name / path parsing ──────────────────────────────────────────────────────
 
 def extract_year(name):
@@ -467,6 +488,11 @@ def _process_one_movie(args):
         root_xml = build_movie_nfo(details)
         write_nfo(nfo_path, root_xml)
         log_fn(f"{prefix} ✓ → Movie.nfo")
+        rd = details.get("release_date", "")
+        imdb_id = (details.get("external_ids") or {}).get("imdb_id")
+        write_plexmatch(folder_path, details.get("title", title),
+                        year=rd[:4] if rd else year,
+                        tmdb_id=details.get("id"), imdb_id=imdb_id)
         return "done"
 
     except Exception as exc:
@@ -634,6 +660,11 @@ def _process_one_show(args):
 
         write_nfo(show_nfo, build_tvshow_nfo(series))
         log_fn(f"{prefix} ✓ → tvshow.nfo")
+        first_aired = series.get("firstAired", "")
+        tmdb_id, imdb_id = _tvdb_remote_ids(series.get("remoteIds"))
+        write_plexmatch(show_path, series.get("name", title),
+                        year=first_aired[:4] if first_aired else None,
+                        tvdb_id=series_id, tmdb_id=tmdb_id, imdb_id=imdb_id)
 
         _process_seasons(show_path, series_id, series_chars, force, log_fn)
         return "done"

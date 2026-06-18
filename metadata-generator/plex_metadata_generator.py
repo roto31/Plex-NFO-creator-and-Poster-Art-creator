@@ -2334,6 +2334,9 @@ class PlexMetadataOrchestrator:
             except IOError as e:
                 logger.error(f"  Failed to write Movie.nfo: {e}")
 
+        # --- Write .plexmatch ---
+        self._write_plexmatch_movie(movie_dir, meta)
+
         # --- Download TMDB artwork (poster + backdrop) ---
         need_poster = 'poster.jpg' in missing_art or 'folder.jpg' in missing_art
         need_backdrop = 'backdrop.jpg' in missing_art
@@ -2457,6 +2460,9 @@ class PlexMetadataOrchestrator:
                     logger.info(f"  ✓ Wrote tvshow.nfo")
                 except IOError as e:
                     logger.error(f"  Failed to write tvshow.nfo: {e}")
+
+            # Write .plexmatch (only if missing)
+            self._write_plexmatch_show(show_dir, meta)
 
             # Download artwork — try embedded extraction from first episode before API
             if 'poster.jpg' in missing_art:
@@ -2582,6 +2588,44 @@ class PlexMetadataOrchestrator:
 
             # Process episodes
             self._process_episodes(season_dir, show_meta, season_num, show_imdb_id)
+
+    @staticmethod
+    def _write_plexmatch_show(show_dir: Path, meta) -> None:
+        """Write .plexmatch only if missing — guarantees Plex uses the correct TVDB ID."""
+        dest = show_dir / '.plexmatch'
+        if dest.exists():
+            return
+        lines = [f"title: {meta.title}"]
+        if meta.year:
+            lines.append(f"year: {meta.year}")
+        if meta.tvdb_id:
+            lines.append(f"tvdbId: {meta.tvdb_id}")
+        if meta.imdb_id:
+            lines.append(f"imdbId: {meta.imdb_id}")
+        try:
+            dest.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+            logger.debug(f"  ✓ Wrote .plexmatch (tvdbId: {meta.tvdb_id})")
+        except IOError as e:
+            logger.warning(f"  Could not write .plexmatch: {e}")
+
+    @staticmethod
+    def _write_plexmatch_movie(movie_dir: Path, meta) -> None:
+        """Write .plexmatch only if missing — guarantees Plex uses the correct TMDB/IMDb ID."""
+        dest = movie_dir / '.plexmatch'
+        if dest.exists():
+            return
+        lines = [f"title: {meta.title}"]
+        if meta.year:
+            lines.append(f"year: {meta.year}")
+        if meta.tmdb_id:
+            lines.append(f"tmdbId: {meta.tmdb_id}")
+        if meta.imdb_id:
+            lines.append(f"imdbId: {meta.imdb_id}")
+        try:
+            dest.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+            logger.debug(f"  ✓ Wrote .plexmatch (tmdbId: {meta.tmdb_id})")
+        except IOError as e:
+            logger.warning(f"  Could not write .plexmatch: {e}")
 
     def _download_theme(self, tvdb_id: int, dest: Path):
         """Download theme.mp3 from Plex's theme CDN (keyed by TVDB ID)."""
