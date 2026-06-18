@@ -31,7 +31,7 @@ from html.parser import HTMLParser
 
 BASE_URL   = 'https://data.metabrainz.org/pub/musicbrainz/data/json-dumps/'
 # Only these two subdumps are needed for artist + album lookups
-WANTED_DUMPS = ('mbdump-artist', 'mbdump-release-group')
+WANTED_DUMPS = ('artist', 'release-group')
 
 
 # ── Default output directory ──────────────────────────────────────────────────
@@ -82,7 +82,9 @@ def _list_latest_dump() -> tuple[str, list[str]]:
         html = r.read().decode()
     p2 = _LinkParser()
     p2.feed(html)
-    tarballs = [l for l in p2.links if l.endswith('.tar.bz2')
+    tarballs = [l for l in p2.links
+                if (l.endswith('.tar.xz') or l.endswith('.tar.bz2'))
+                and not l.endswith('.asc')
                 and any(l.startswith(w) for w in WANTED_DUMPS)]
     return latest_url, tarballs
 
@@ -135,7 +137,7 @@ def _extract(tarball: Path, output_dir: Path):
     """Extract a MusicBrainz dump tarball into output_dir."""
     print(f"\nExtracting {tarball.name} …")
     output_dir.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(tarball, 'r:bz2') as tf:
+    with tarfile.open(tarball, 'r:*') as tf:
         members = tf.getmembers()
         total = len(members)
         for i, member in enumerate(members, 1):
@@ -200,8 +202,8 @@ def main():
                 sys.exit(1)
 
             # Extract
-            # Determine subdirectory name: mbdump-artist → artist, mbdump-release-group → release-group
-            subdir_name = filename.replace('mbdump-', '').split('.')[0]
+            # Determine subdirectory name: artist.tar.xz → artist
+            subdir_name = filename.split('.')[0]
             subdir = output_dir / subdir_name
 
             # Remove old data before extracting fresh
