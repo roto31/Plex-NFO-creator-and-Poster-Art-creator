@@ -896,7 +896,10 @@ class DiscogsProvider:
 
     SEARCH_URL = 'https://api.discogs.com/database/search'
     BASE_URL   = 'https://api.discogs.com'
-    _MIN_INTERVAL = 1.1   # 60 req/min with token → ~1 req/sec to stay safe
+    _MIN_INTERVAL = 1.1   # safe floor; dynamically raised when rate limit headers say so
+
+    # Matches Discogs disambiguation suffixes: "The Beatles (2)", "Prince (3)"
+    _DISAMBIG_RE = re.compile(r'\s*\(\d+\)\s*$')
 
     def __init__(self, token: str = ''):
         self.token = token
@@ -907,19 +910,83 @@ class DiscogsProvider:
             headers['Authorization'] = f'Discogs token={token}'
         self.session.headers.update(headers)
         self._last: float = 0.0
+        self._rate_limit_remaining: int = 60
 
-    def _get(self, url: str, params: dict = None) -> Optional[dict]:
-        elapsed = time.time() - self._last
-        if elapsed < self._MIN_INTERVAL:
-            time.sleep(self._MIN_INTERVAL - elapsed)
-        self._last = time.time()
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _get(self, url: str, params: dict = None, retries: int = 3) -> Optional[dict]:
+        for attempt in range(retries):
+            elapsed = time.time() - self._last
+            if elapsed < self._MIN_INTERVAL:
+                time.sleep(self._MIN_INTERVAL - elapsed)
+            # Slow down proactively when running low on quota
+            if self._rate_limit_remaining < 5:
+                time.sleep(3.0)
+            self._last = time.time()
+            try:
+                resp = self.session.get(url, params=params or {}, timeout=15)
+                # Track remaining quota from response headers
+                remaining = resp.headers.get('X-Discogs-Ratelimit-Remaining')
+                if remaining is not None:
+                    self._rate_limit_remaining = int(remaining)
+                if resp.status_code == 429:
+                    wait = 60 / max(1, int(resp.headers.get('X-Discogs-Ratelimit', 60)))
+                    logger.warning(f"Discogs rate limit hit — waiting {wait:.0f}s (attempt {attempt+1}/{retries})")
+                    time.sleep(wait + 1)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 404:
+                    return None
+                logger.debug(f"Discogs HTTP error: {e}")
+                return None
+            except Exception as e:
+                logger.debug(f"Discogs request failed: {e}")
+                return None
+        return None
+
+    @classmethod
+    def _clean_name(cls, name: str) -> str:
+        """Strip Discogs disambiguation suffix e.g. 'Prince (3)' → 'Prince'."""
+        return cls._DISAMBIG_RE.sub('', name).strip()
+
+    @staticmethod
+    def _parse_duration(duration_str: str) -> int:
+        """Convert '3:45' or '1:03:45' to seconds."""
+        if not duration_str:
+            return 0
         try:
-            resp = self.session.get(url, params=params or {}, timeout=15)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.debug(f"Discogs request failed: {e}")
-            return None
+            parts = [int(p) for p in duration_str.strip().split(':')]
+            if len(parts) == 2:
+                return parts[0] * 60 + parts[1]
+            if len(parts) == 3:
+                return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        except Exception:
+            pass
+        return 0
+
+    @staticmethod
+    def _parse_position(pos: str) -> Tuple[int, int]:
+        """Parse Discogs track position into (disc_number, track_number).
+        '4' → (1, 4), '1-4' or 'A4' → (1, 4), '2-1' → (2, 1)."""
+        if not pos:
+            return 1, 0
+        # Multi-disc numeric: "2-4"
+        m = re.match(r'^(\d+)-(\d+)$', pos)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+        # Vinyl side: "A1", "B3", "C2"
+        m = re.match(r'^([A-Z])(\d+)$', pos)
+        if m:
+            side = ord(m.group(1)) - ord('A')
+            disc = side // 2 + 1
+            return disc, int(m.group(2))
+        # Plain number
+        m = re.match(r'^(\d+)$', pos)
+        if m:
+            return 1, int(m.group(1))
+        return 1, 0
 
     # ── Artist ────────────────────────────────────────────────────────────
 
@@ -929,23 +996,27 @@ class DiscogsProvider:
 
     def build_artist_metadata(self, result: dict) -> 'ArtistMetadata':
         artist_id = result.get('id')
-        image_url = None
+        # Use cover_image from search result as quick fallback (no extra call needed)
+        image_url = result.get('cover_image') or result.get('thumb')
 
         if artist_id:
             detail = self._get(f'{self.BASE_URL}/artists/{artist_id}')
             if detail:
                 images = detail.get('images', [])
                 primary = next((i for i in images if i.get('type') == 'primary'), None)
-                image_url = (primary or (images[0] if images else {})).get('uri')
+                hi_res = (primary or (images[0] if images else {})).get('uri')
+                if hi_res:
+                    image_url = hi_res
 
         return ArtistMetadata(
-            name=result.get('title', ''),
+            name=self._clean_name(result.get('title', '')),
             image_url=image_url,
         )
 
     # ── Album ─────────────────────────────────────────────────────────────
 
     def search_album(self, album_title: str, artist_name: str) -> List[Dict]:
+        # Try master first (canonical release, best metadata)
         data = self._get(self.SEARCH_URL, {
             'release_title': album_title,
             'artist': artist_name,
@@ -953,7 +1024,7 @@ class DiscogsProvider:
             'per_page': 5,
         })
         results = data.get('results', []) if data else []
-        # Fall back to release search if no master found
+        # Fall back to specific release if no master found
         if not results:
             data = self._get(self.SEARCH_URL, {
                 'release_title': album_title,
@@ -965,32 +1036,50 @@ class DiscogsProvider:
         return results
 
     def get_album(self, result: dict) -> Optional['AlbumMetadata']:
-        resource_url = result.get('resource_url') or result.get('master_url')
+        resource_url = result.get('resource_url')
         if not resource_url:
             return None
+
+        # Use cover_image from search result immediately — avoid extra call if possible
+        search_cover = result.get('cover_image') or result.get('thumb')
+
         detail = self._get(resource_url)
         if not detail:
             return None
 
-        # Artwork — prefer primary image, fall back to first available
+        # Artwork — prefer hi-res primary image from detail, fall back to search thumbnail
         images = detail.get('images', [])
         primary = next((i for i in images if i.get('type') == 'primary'), None)
-        cover_url = (primary or (images[0] if images else {})).get('uri')
+        cover_url = (primary or (images[0] if images else {})).get('uri') or search_cover
 
-        artists = [a.get('name', '') for a in detail.get('artists', [])]
+        # Artist names — strip disambiguation suffixes
+        artists = [self._clean_name(a.get('name', '')) for a in detail.get('artists', [])]
+
         genres = detail.get('genres', []) + detail.get('styles', [])
+
+        # Tracklist — parse position for disc/track numbers and duration
         tracklist = []
         for t in detail.get('tracklist', []):
-            if t.get('type_') == 'track':
-                tracklist.append(TrackMetadata(
-                    title=t.get('title', ''),
-                    track_number=len(tracklist) + 1,
-                    disc_number=1,
-                    duration=0,
-                ))
+            if t.get('type_') not in ('track', None, ''):
+                continue
+            if not t.get('title'):
+                continue
+            disc_num, track_num = self._parse_position(t.get('position', ''))
+            if track_num == 0:
+                track_num = len(tracklist) + 1
+            tracklist.append(TrackMetadata(
+                title=t.get('title', ''),
+                track_number=track_num,
+                disc_number=disc_num,
+                duration=self._parse_duration(t.get('duration', '')),
+            ))
 
         label_info = detail.get('labels', [{}])
-        label = label_info[0].get('name', '') if label_info else ''
+        label = self._clean_name(label_info[0].get('name', '')) if label_info else ''
+
+        # Use genres as plot if no notes available
+        notes = detail.get('notes', '')
+        plot = notes if notes else ', '.join(genres[:5])
 
         return AlbumMetadata(
             title=detail.get('title', result.get('title', '')),
@@ -1000,7 +1089,7 @@ class DiscogsProvider:
             label=label,
             cover_url=cover_url,
             tracks=tracklist,
-            plot=detail.get('notes', ''),
+            plot=plot,
             rating=0.0,
         )
 
