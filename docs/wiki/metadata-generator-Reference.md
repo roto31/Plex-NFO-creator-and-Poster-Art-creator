@@ -131,7 +131,7 @@ python3 plex_metadata_generator.py [OPTIONS]
 | `--show NAME` | — | Process only this TV show folder |
 | `--movie NAME` | — | Process only this movie folder |
 | `--force` | off | Overwrite existing NFO and artwork |
-| `--workers N` | 1 | Parallel workers for movie/TV processing. Use `4` for initial bulk runs; leave at `1` for daily scheduled runs. |
+| `--workers N` | 1 | Parallel workers. Up to `16` is safe (class-level thread locks). Use `4`–`8` for initial bulk runs; leave at `1` for daily scheduled. |
 | `--no-prompts` | off | Skip all setup dialogs (for unattended/scheduled runs) |
 | `--debug` | off | Enable debug logging |
 
@@ -147,7 +147,7 @@ python3 plex_metadata_generator_extended.py [OPTIONS]
 | `--media-type {tv,movies,music,all}` | `all` | Which library to process |
 | `--item NAME` | — | Process only a specific show, movie, or artist |
 | `--force` | off | Overwrite existing NFO and artwork |
-| `--workers N` | 1 | Parallel workers for movie/TV/music processing |
+| `--workers N` | 1 | Parallel workers. Up to `16` safe. Use `4`–`8` for bulk runs; `1` for daily scheduled. |
 | `--debug` | off | Enable debug logging |
 
 ---
@@ -537,11 +537,13 @@ Ported from `scraper.py` where it was battle-tested against 1,700+ movie librari
 
 ## Parallel Processing (`--workers`)
 
-By default the generator processes one movie/show at a time (`--workers 1`). Increasing workers uses a `ThreadPoolExecutor` to process multiple folders simultaneously:
+By default the generator processes one movie/show at a time (`--workers 1`). Increasing workers uses a `ThreadPoolExecutor` to process multiple folders simultaneously.
+
+All API providers (TMDB, TVDB, FanArt.tv, iTunes, Discogs) use **class-level thread locks** so all workers share a single serialized rate-limit timer per provider — no duplicate requests, no 429 errors from simultaneous bursts.
 
 ```bash
-# Initial bulk pass — 4× faster for large libraries
-python3 plex_metadata_generator.py --media-type all --workers 4 --no-prompts
+# Initial bulk pass — significantly faster for large libraries
+python3 plex_metadata_generator.py --media-type all --workers 8 --no-prompts
 
 # Daily scheduled runs — sequential is fine (most items are already complete)
 python3 plex_metadata_generator.py --media-type all --no-prompts
@@ -549,7 +551,7 @@ python3 plex_metadata_generator.py --media-type all --no-prompts
 
 **Recommended values:**
 - `1` (default) — daily scheduled runs; most items skip immediately (already complete)
-- `4` — initial bulk pass on a library of 1,000+ items; ~4× throughput improvement
-- `> 4` — diminishing returns; API rate limits become the bottleneck
+- `4`–`8` — initial bulk pass on a library of 1,000+ items; diminishing returns above 8 as API rate limits become the bottleneck
+- `16` — maximum safe value; appropriate for very large music libraries with the MusicBrainz JSON dump (which has no rate limit)
 
-Music processing is artist-parallel (one artist per worker), so `--workers 4` processes 4 artists simultaneously including all their albums and tracks.
+Music processing is artist-parallel (one artist per worker), so `--workers 8` processes 8 artists simultaneously including all their albums and tracks.

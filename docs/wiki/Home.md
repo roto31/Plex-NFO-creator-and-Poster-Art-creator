@@ -104,7 +104,9 @@ A complementary, scheduled automation layer that runs daily to pick up newly add
 
 Two scripts are available:
 - `metadata-generator/plex_metadata_generator.py` — TV shows + Movies
-- `metadata-generator/plex_metadata_generator_extended.py` — TV shows + Movies + Music (iTunes Search API + Apple MusicKit + MusicBrainz)
+- `metadata-generator/plex_metadata_generator_extended.py` — TV shows + Movies + Music, with a cascading provider chain: iTunes Search API (always active, no key) → Apple MusicKit (optional) → MusicBrainz JSON dump (local, no rate limits) → Discogs (best for vinyl, older releases, classical)
+
+A companion script `metadata-generator/download_mb_json.py` downloads and extracts the MusicBrainz JSON dump automatically — run it once, then monthly to keep data current.
 
 See the [Metadata Generator Reference](metadata-generator-Reference) for full documentation.
 

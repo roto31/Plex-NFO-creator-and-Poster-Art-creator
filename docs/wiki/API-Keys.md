@@ -17,6 +17,7 @@ Every API key used by this suite is **free** (or optionally paid for higher limi
 | **Apple MusicKit** | extended script (music) | ❌ Optional | $99/yr Apple Developer | [developer.apple.com/account](https://developer.apple.com/account) |
 | **iTunes Search API** | extended script (music) | ✅ Auto (no key needed) | Free | No registration |
 | **MusicBrainz** | extended script (music) | ✅ Auto (no key needed) | Free | No key — just set contact email |
+| **Discogs** | extended script (music fallback) | ❌ Optional | Free | [discogs.com/settings/developers](https://www.discogs.com/settings/developers) |
 
 ---
 
@@ -336,19 +337,34 @@ This email appears in your requests' `User-Agent` header as `PlexMetadataGenerat
 
 MusicBrainz enforces **1 request per second** for the REST API. The extended script automatically enforces a 1.1-second minimum interval and retries with exponential backoff on 503 responses.
 
-### Optional: Local MusicBrainz database (no rate limits)
+### Optional: Local MusicBrainz data (no rate limits)
 
-For large music libraries, you can download the MusicBrainz database for fully local, instant, rate-limit-free lookups:
+For large music libraries, use a local copy of MusicBrainz instead of the REST API:
 
-**Option A — PostgreSQL dump** (~30 GB; fastest lookups):
+**Option A — JSON dump** (recommended; ~80 GB; no database required):
+
+Use the included downloader script — it handles everything automatically:
+```bash
+python3 metadata-generator/download_mb_json.py
+```
+Downloads `artist.tar.xz` and `release-group.tar.xz` from the latest MusicBrainz weekly export and extracts to `~/Library/Application Support/PlexMetadataGenerator/mb-json/` (macOS). No configuration needed — the script auto-detects this path on the next run.
+
+Options:
+```
+--check           Show what would be downloaded without downloading
+--dir PATH        Override output directory
+--keep-tarballs   Keep the .tar.xz files after extraction
+```
+
+Re-run monthly to keep data current. If you extracted to a custom path:
+```json
+"musicbrainz_json_dump_dir": "/path/to/mb-json"
+```
+
+**Option B — PostgreSQL dump** (~30 GB; fastest lookups, requires PostgreSQL):
 - Download from [data.metabrainz.org/pub/musicbrainz/data/fullexport/](https://data.metabrainz.org/pub/musicbrainz/data/fullexport/)
 - Import with: `setup-musicbrainz-db.sh` (included in the repo)
-- Requires PostgreSQL and `pip3 install psycopg2-binary`
-
-**Option B — JSON dump** (~80 GB; no database required):
-- Download from [data.metabrainz.org/pub/musicbrainz/data/json-dumps/](https://data.metabrainz.org/pub/musicbrainz/data/json-dumps/)
-- Extract to any directory; set `musicbrainz_json_dump_dir` in config
-- No additional dependencies
+- Requires: `pip3 install psycopg2-binary`
 
 Config for local database:
 ```json
@@ -363,10 +379,50 @@ Config for local database:
 }
 ```
 
-Config for JSON dump:
+---
+
+## Discogs
+
+**Used for:** Music metadata fallback — best for **vinyl pressings, 7"/12" singles, older releases, imports, classical, and jazz** where iTunes and MusicBrainz have sparse coverage.
+
+**Required for:** Nothing — Discogs is optional. iTunes handles the mainstream catalog without it. Add Discogs if you have albums showing `artist.nfo` but no `cover.jpg` after a full music run.
+
+### How to get a Discogs personal token
+
+1. Create a free account at [discogs.com](https://www.discogs.com)
+2. Go to **Settings → Developers** (direct link: [discogs.com/settings/developers](https://www.discogs.com/settings/developers))
+3. Click **Generate new token** under "Personal Access Tokens"
+4. Copy the token string
+
+A personal access token (vs. OAuth) gives full image URL access and high rate limits (60 req/min). OAuth is not required and adds no benefit for this use case.
+
+### Config
+
 ```json
-"musicbrainz_json_dump_dir": "/path/to/json-dump"
+"discogs": {
+  "token": "YOUR_DISCOGS_PERSONAL_TOKEN"
+}
 ```
+
+Store this in your **local config file only** — do not commit the token to the git repository.
+
+### Rate limits
+
+Discogs allows 60 requests/minute with a personal token. The script enforces this class-level, so all workers share one rate-limit timer — safe under `--workers 16`.
+
+### What Discogs provides over iTunes
+
+| Feature | iTunes | Discogs |
+|---------|--------|---------|
+| Mainstream albums | ✅ Excellent | ✅ Good |
+| Vinyl / physical pressings | ❌ | ✅ Excellent |
+| 7"/12" singles | ❌ | ✅ |
+| Pre-1970 releases | ⚠ Sparse | ✅ |
+| Catalog and matrix numbers | ❌ | ✅ |
+| Country of pressing | ❌ | ✅ |
+| Label / sub-label details | ⚠ | ✅ |
+| Classical / jazz | ⚠ | ✅ Better coverage |
+| Multi-disc track positions | Disc/track only | `A1`, `B2`, `2-4` (side/disc/track) |
 
 ---
 
@@ -401,6 +457,10 @@ Full `plex-metadata-generator-extended.conf` with all keys filled in:
   },
 
   "musicbrainz_contact": "your@email.com",
+
+  "discogs": {
+    "token": "YOUR_DISCOGS_PERSONAL_TOKEN"
+  },
 
   "subtitles": {
     "enabled": true,

@@ -320,7 +320,36 @@ Use `--force` to override this behavior and regenerate everything.
 
 **Q: What is the difference between `plex_metadata_generator.py` and `plex_metadata_generator_extended.py`?**
 
-A: Both handle TV shows and Movies. The extended script additionally supports Music libraries (iTunes Search API + Apple MusicKit + MusicBrainz for artist, album, and track metadata). iTunes Search API requires no credentials and works out of the box. Apple MusicKit (optional, requires an Apple Developer account) adds higher-resolution artwork. MusicBrainz provides a local-DB fallback. If you don't have a music library in Plex, use the standard script.
+A: Both handle TV shows and Movies. The extended script additionally supports Music libraries using a cascading provider chain: Apple MusicKit (optional, requires Apple Developer account) → iTunes Search API (always active, free, no key) → MusicBrainz JSON dump (optional local file, no rate limits) → Discogs (optional, best for vinyl and older releases). If you don't have a music library in Plex, use the standard script.
+
+---
+
+**Q: Some of my albums have NFO files but no `cover.jpg` — why?**
+
+A: The most common cause is an album name mismatch between your folder and what any provider returns. The script tries up to 7 fuzzy name variants (strip disc/volume suffix, strip year, strip punctuation, remove article, ASCII-fold accents) across all providers before giving up.
+
+If albums are still missed after fuzzy matching:
+- **Vinyl, cassettes, pre-1980 releases, classical, jazz:** Enable Discogs — it has far better coverage of physical-media and older releases than iTunes
+- Run with `--debug` to see which variants were tried and which provider responded
+- Download the MusicBrainz JSON dump (`python3 metadata-generator/download_mb_json.py`) — it covers many albums that iTunes doesn't index
+
+---
+
+**Q: The music parser stopped mid-way through my library. Do I have to start over?**
+
+A: No. The extended script saves a checkpoint after every completed artist to `~/Library/Caches/PlexMetadataGenerator/music_progress.json`. Re-run the same command and it resumes from where it left off — already-completed artists are skipped instantly.
+
+To restart from scratch: add `--force` to the command.
+
+---
+
+**Q: What does Discogs add that iTunes doesn't have?**
+
+A: Discogs is a physical-media database — it catalogs vinyl pressings, cassettes, 7" and 12" singles, country-of-pressing variants, catalog numbers, and matrix/runout numbers. For digital album metadata (plot, genre, track list, artwork) on mainstream releases, iTunes is sufficient. Discogs fills the gap for:
+- Vinyl and physical media with no digital equivalent
+- Pre-digital releases (1950s–1980s) where iTunes coverage is thin
+- Classical and jazz albums (where artwork and label data is often incomplete in iTunes)
+- Import pressings and regional variants
 
 ---
 
