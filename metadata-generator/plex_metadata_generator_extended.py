@@ -1352,14 +1352,55 @@ class PlexMetadataOrchestrator:
             if show_dir.is_dir():
                 self._process_tv_show(show_dir.name, show_dir)
     
+    def _checkpoint_path(self) -> Path:
+        """Return path to music progress checkpoint file."""
+        from plex_metadata_generator import _default_cache_dir
+        return Path(_default_cache_dir()) / 'music_progress.json'
+
+    def _load_checkpoint(self) -> set:
+        """Return set of artist directory paths already completed."""
+        p = self._checkpoint_path()
+        if p.exists():
+            try:
+                return set(json.loads(p.read_text()))
+            except Exception:
+                pass
+        return set()
+
+    def _save_checkpoint(self, completed: set):
+        """Atomically write completed artist set to checkpoint file."""
+        p = self._checkpoint_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix('.tmp')
+        tmp.write_text(json.dumps(sorted(completed)))
+        tmp.replace(p)
+
     def process_music_library(self, specific_artist: str = None):
         """Process music library (artists and albums)"""
         workers = getattr(self, 'workers', 1)
+        force = getattr(self, 'force', False)
         logger.info(f"Processing music library ({workers} worker(s))")
 
         if not self.music_library_root.exists():
             logger.error(f"Music library root does not exist: {self.music_library_root}")
             return
+
+        # Load checkpoint — skip artists already fully completed on a prior run
+        completed = self._load_checkpoint() if not force else set()
+        if completed:
+            logger.info(f"Resuming — {len(completed)} artist(s) already done (use --force to reprocess all)")
+
+        checkpoint_lock = threading.Lock()
+
+        def _process_and_checkpoint(artist_dir: Path):
+            key = str(artist_dir)
+            if key in completed:
+                logger.info(f"⏭ {artist_dir.name} — already completed (checkpoint)")
+                return
+            self._process_music_artist(artist_dir)
+            with checkpoint_lock:
+                completed.add(key)
+                self._save_checkpoint(completed)
 
         # Structure: Artist / Album / Tracks
         artist_dirs = [
@@ -1370,7 +1411,7 @@ class PlexMetadataOrchestrator:
 
         if workers > 1:
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                futures = {ex.submit(self._process_music_artist, d): d for d in artist_dirs}
+                futures = {ex.submit(_process_and_checkpoint, d): d for d in artist_dirs}
                 for future in as_completed(futures):
                     try:
                         future.result()
@@ -1378,7 +1419,7 @@ class PlexMetadataOrchestrator:
                         logger.error(f"Error processing {futures[future].name}: {e}")
         else:
             for artist_dir in artist_dirs:
-                self._process_music_artist(artist_dir)
+                _process_and_checkpoint(artist_dir)
     
     def _process_tv_show(self, show_name: str, show_path: Path):
         """Process a single TV show (existing implementation)"""
@@ -1390,6 +1431,27 @@ class PlexMetadataOrchestrator:
     def _process_music_artist(self, artist_path: Path):
         """Process artist directory with albums"""
         artist_name = artist_path.name
+        force = getattr(self, 'force', False)
+
+        # Skip if artist NFO and image already present (unless --force)
+        if not force and (artist_path / 'artist.nfo').exists() and (artist_path / 'artist.jpg').exists():
+            logger.debug(f"⏭ {artist_name} — artist.nfo + artist.jpg present, checking albums")
+            # Still scan albums — some may be incomplete
+            album_dirs = sorted(d for d in artist_path.iterdir() if d.is_dir() and not d.name.startswith('.'))
+            workers = getattr(self, 'workers', 1)
+            if workers > 1 and len(album_dirs) > 1:
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    futures = {ex.submit(self._process_music_album, d, artist_name, None): d for d in album_dirs}
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logger.error(f"Error processing album {futures[future].name}: {e}")
+            else:
+                for album_dir in album_dirs:
+                    self._process_music_album(album_dir, artist_name, None)
+            return
+
         logger.info(f"Processing music artist: {artist_name}")
         
         # Search for artist metadata — priority: local MB PG → local MB JSON → MusicKit → iTunes → MB REST
@@ -1489,9 +1551,16 @@ class PlexMetadataOrchestrator:
             for album_dir in album_dirs:
                 self._process_music_album(album_dir, artist_name, artist_metadata)
     
-    def _process_music_album(self, album_path: Path, artist_name: str, artist_metadata: ArtistMetadata):
+    def _process_music_album(self, album_path: Path, artist_name: str, artist_metadata):
         """Process album directory with tracks"""
         album_name = album_path.name
+        force = getattr(self, 'force', False)
+
+        # Skip if album NFO and cover art already present (unless --force)
+        if not force and (album_path / 'album.nfo').exists() and (album_path / 'folder.jpg').exists():
+            logger.debug(f"  ⏭ {album_name} — album.nfo + folder.jpg present")
+            return
+
         logger.info(f"Processing album: {album_name} by {artist_name}")
         
         # Search for album metadata — priority: local MB PG → local MB JSON → MusicKit → iTunes → MB REST
