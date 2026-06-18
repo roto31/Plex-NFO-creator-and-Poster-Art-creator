@@ -1459,9 +1459,25 @@ class PlexMetadataOrchestrator:
             elif artist_metadata.image_url:
                 self.downloader.download_image(artist_metadata.image_url, artist_img_path)
         
-        # Process albums in this artist directory
-        for album_dir in artist_path.iterdir():
-            if album_dir.is_dir() and not album_dir.name.startswith('.'):
+        # Process albums in this artist directory (parallel when workers > 1)
+        album_dirs = sorted(
+            d for d in artist_path.iterdir()
+            if d.is_dir() and not d.name.startswith('.')
+        )
+        workers = getattr(self, 'workers', 1)
+        if workers > 1 and len(album_dirs) > 1:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {
+                    ex.submit(self._process_music_album, d, artist_name, artist_metadata): d
+                    for d in album_dirs
+                }
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Error processing album {futures[future].name}: {e}")
+        else:
+            for album_dir in album_dirs:
                 self._process_music_album(album_dir, artist_name, artist_metadata)
     
     def _process_music_album(self, album_path: Path, artist_name: str, artist_metadata: ArtistMetadata):
@@ -2105,7 +2121,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--workers', type=int, default=1, metavar='N',
-        help='Parallel workers for movie/TV processing (default: 1; use 4 for bulk runs)'
+        help='Parallel workers for movie/TV/music processing (default: 1; use 4–8 for bulk runs)'
     )
     parser.add_argument(
         '--debug',
