@@ -1463,10 +1463,24 @@ class PlexMetadataOrchestrator:
 
         logger.info(f"Processing music artist: {artist_name}")
         
-        # Search for artist metadata — priority: local MB PG → local MB JSON → MusicKit → iTunes → MB REST
+        # Search for artist metadata — priority: iTunes → MusicKit → local MB PG → local MB JSON
         artist_metadata = None
 
-        # 1. Local MusicBrainz PostgreSQL DB (fastest, no rate limits)
+        # 1. iTunes Search API (free, no auth, no rate limits, always available)
+        if not artist_metadata and self.itunes:
+            results = self.itunes.search_artist(artist_name)
+            if results:
+                artist_metadata = self.itunes.build_artist_metadata(results[0])
+                logger.info(f"Found artist '{artist_name}' via iTunes")
+
+        # 2. Apple MusicKit API (rich artwork + genres; requires Developer account)
+        if not artist_metadata and self.musickit:
+            results = self.musickit.search_artist(artist_name)
+            if results:
+                artist_metadata = self.musickit.build_artist_metadata(results[0])
+                logger.info(f"Found artist '{artist_name}' via Apple MusicKit")
+
+        # 3. Local MusicBrainz PostgreSQL DB (if installed)
         if not artist_metadata and self.mb_local and self.mb_local.available:
             results = self.mb_local.search_artist(artist_name)
             if results:
@@ -1476,7 +1490,7 @@ class PlexMetadataOrchestrator:
                 )
                 logger.info(f"Found artist '{artist_name}' in local MusicBrainz DB")
 
-        # 2. Local MusicBrainz JSON dump
+        # 4. Local MusicBrainz JSON dump (if installed)
         if not artist_metadata and self.mb_json and self.mb_json.available:
             results = self.mb_json.search_artist(artist_name)
             if results:
@@ -1485,30 +1499,6 @@ class PlexMetadataOrchestrator:
                     mbid=results[0]['id'],
                 )
                 logger.info(f"Found artist '{artist_name}' in local MusicBrainz JSON dump")
-
-        # 3. Apple MusicKit API (rich artwork + genres; requires Developer account)
-        if not artist_metadata and self.musickit:
-            results = self.musickit.search_artist(artist_name)
-            if results:
-                artist_metadata = self.musickit.build_artist_metadata(results[0])
-                logger.info(f"Found artist '{artist_name}' via Apple MusicKit")
-
-        # 4. iTunes Search API (free, no auth, always available)
-        if not artist_metadata and self.itunes:
-            results = self.itunes.search_artist(artist_name)
-            if results:
-                artist_metadata = self.itunes.build_artist_metadata(results[0])
-                logger.info(f"Found artist '{artist_name}' via iTunes")
-
-        # 5. MusicBrainz REST API (rate-limited fallback)
-        if not artist_metadata and self.musicbrainz:
-            results = self.musicbrainz.search_artist(artist_name)
-            if results:
-                artist_metadata = ArtistMetadata(
-                    name=results[0]['name'],
-                    mbid=results[0]['id'],
-                )
-                logger.info(f"Found artist '{artist_name}' on MusicBrainz")
         
         if not artist_metadata:
             # Create basic metadata
@@ -1572,37 +1562,10 @@ class PlexMetadataOrchestrator:
 
         logger.info(f"Processing album: {album_name} by {artist_name}")
         
-        # Search for album metadata — priority: local MB PG → local MB JSON → MusicKit → iTunes → MB REST
+        # Search for album metadata — priority: iTunes → MusicKit → local MB PG → local MB JSON
         album_metadata = None
 
-        # 1. Local MusicBrainz PostgreSQL DB
-        if not album_metadata and self.mb_local and self.mb_local.available:
-            results = self.mb_local.search_release(album_name, artist_name)
-            if results:
-                mbid = results[0]['id']
-                album_metadata = self.mb_local.get_release(mbid)
-                if album_metadata:
-                    logger.info(f"Found album '{album_name}' in local MusicBrainz DB")
-
-        # 2. Local MusicBrainz JSON dump
-        if not album_metadata and self.mb_json and self.mb_json.available:
-            results = self.mb_json.search_release(album_name, artist_name)
-            if results:
-                mbid = results[0]['id']
-                album_metadata = self.mb_json.get_release(mbid)
-                if album_metadata:
-                    logger.info(f"Found album '{album_name}' in local MusicBrainz JSON dump")
-
-        # 3. Apple MusicKit API (high-res artwork + full metadata)
-        if not album_metadata and self.musickit:
-            results = self.musickit.search_album(album_name, artist_name)
-            if results:
-                apple_id = results[0].get('id', '')
-                album_metadata = self.musickit.get_album(apple_id)
-                if album_metadata:
-                    logger.info(f"Found album '{album_name}' via Apple MusicKit")
-
-        # 4. iTunes Search API (free, no auth)
+        # 1. iTunes Search API (free, no auth, no rate limits, always available)
         if not album_metadata and self.itunes:
             results = self.itunes.search_album(album_name, artist_name)
             if results:
@@ -1611,14 +1574,32 @@ class PlexMetadataOrchestrator:
                 if album_metadata:
                     logger.info(f"Found album '{album_name}' via iTunes")
 
-        # 5. MusicBrainz REST API (rate-limited fallback)
-        if not album_metadata and self.musicbrainz:
-            results = self.musicbrainz.search_release(album_name, artist_name)
+        # 2. Apple MusicKit API (high-res artwork + full metadata; requires Developer account)
+        if not album_metadata and self.musickit:
+            results = self.musickit.search_album(album_name, artist_name)
+            if results:
+                apple_id = results[0].get('id', '')
+                album_metadata = self.musickit.get_album(apple_id)
+                if album_metadata:
+                    logger.info(f"Found album '{album_name}' via Apple MusicKit")
+
+        # 3. Local MusicBrainz PostgreSQL DB (if installed)
+        if not album_metadata and self.mb_local and self.mb_local.available:
+            results = self.mb_local.search_release(album_name, artist_name)
             if results:
                 mbid = results[0]['id']
-                album_metadata = self.musicbrainz.get_release(mbid)
+                album_metadata = self.mb_local.get_release(mbid)
                 if album_metadata:
-                    logger.info(f"Found album '{album_name}' on MusicBrainz")
+                    logger.info(f"Found album '{album_name}' in local MusicBrainz DB")
+
+        # 4. Local MusicBrainz JSON dump (if installed)
+        if not album_metadata and self.mb_json and self.mb_json.available:
+            results = self.mb_json.search_release(album_name, artist_name)
+            if results:
+                mbid = results[0]['id']
+                album_metadata = self.mb_json.get_release(mbid)
+                if album_metadata:
+                    logger.info(f"Found album '{album_name}' in local MusicBrainz JSON dump")
         
         if not album_metadata:
             # Create basic metadata
