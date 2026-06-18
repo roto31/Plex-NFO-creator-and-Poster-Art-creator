@@ -2833,7 +2833,6 @@ if __name__ == '__main__':
     if not args.no_prompts:
         config = prompt_missing_library_paths(config, args.config)
         config = prompt_missing_api_keys(config, args.config)
-        config = prompt_musicbrainz_local_db(config, args.config)
         if not args.force:
             args.force = prompt_force_flag()
 
