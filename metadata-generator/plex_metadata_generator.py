@@ -2637,12 +2637,8 @@ class PlexMetadataOrchestrator:
                 except IOError:
                     pass
 
-            if needs_thumb:
-                # Try embedded artwork from the episode file first
-                if self._extract_embedded_artwork(vf, thumb_path):
-                    logger.debug(f"  ✓ Extracted thumb from embedded artwork ({vf.name})")
-                elif ep_meta and ep_meta.thumb_url:
-                    self.dl.download_image(ep_meta.thumb_url, thumb_path)
+            if needs_thumb and ep_meta and ep_meta.thumb_url:
+                self.dl.download_image(ep_meta.thumb_url, thumb_path)
 
             # Download subtitles for this episode
             if self.subtitle_dl and show_imdb_id and ep_num is not None:
