@@ -2285,6 +2285,9 @@ class PlexMetadataOrchestrator:
 
         if not needs_nfo and not missing_art:
             logger.info(f"⏭ {folder.name} — already complete")
+            # Backfill .plexmatch from existing NFO if still missing (zero API calls)
+            if not (folder / '.plexmatch').exists():
+                self._backfill_plexmatch_from_nfo(folder, nfo_path, 'movie')
             return
 
         logger.info(f"Processing movie: {folder.name}")
@@ -2497,6 +2500,13 @@ class PlexMetadataOrchestrator:
         else:
             logger.debug(f"⏭ {show_dir.name} — show level complete")
 
+        # Backfill .plexmatch from existing NFO if still missing (zero API calls)
+        if not (show_dir / '.plexmatch').exists():
+            if meta:
+                self._write_plexmatch_show(show_dir, meta)
+            else:
+                self._backfill_plexmatch_from_nfo(show_dir, nfo_path, 'show')
+
         # Resolve show IMDb ID for subtitle lookups (from metadata or existing NFO)
         show_imdb_id: Optional[str] = None
         if meta and meta.imdb_id:
@@ -2588,6 +2598,38 @@ class PlexMetadataOrchestrator:
 
             # Process episodes
             self._process_episodes(season_dir, show_meta, season_num, show_imdb_id)
+
+    @staticmethod
+    def _backfill_plexmatch_from_nfo(folder: Path, nfo_path: Path, media_type: str) -> None:
+        """Parse an existing NFO and write .plexmatch without any API call."""
+        if not nfo_path.exists():
+            return
+        try:
+            tree = ET.parse(nfo_path)
+            root = tree.getroot()
+            title = root.findtext('title', '').strip()
+            year  = root.findtext('year', '').strip()
+            ids: Dict[str, str] = {}
+            for uid in root.findall('uniqueid'):
+                t = (uid.get('type') or '').lower()
+                v = (uid.text or '').strip()
+                if t and v:
+                    ids[t] = v
+            dest = folder / '.plexmatch'
+            lines = [f"title: {title}"] if title else []
+            if year:
+                lines.append(f"year: {year}")
+            if media_type == 'show' and ids.get('tvdb'):
+                lines.append(f"tvdbId: {ids['tvdb']}")
+            if media_type == 'movie' and ids.get('tmdb'):
+                lines.append(f"tmdbId: {ids['tmdb']}")
+            if ids.get('imdb'):
+                lines.append(f"imdbId: {ids['imdb']}")
+            if lines:
+                dest.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+                logger.debug(f"  ✓ Backfilled .plexmatch from NFO ({folder.name})")
+        except Exception as e:
+            logger.debug(f"  Could not backfill .plexmatch for {folder.name}: {e}")
 
     @staticmethod
     def _write_plexmatch_show(show_dir: Path, meta) -> None:
@@ -2772,24 +2814,53 @@ class PlexMetadataOrchestrator:
     # Plex refresh
     # ------------------------------------------------------------------
 
-    def refresh_plex_library(self, library_key: str = '') -> bool:
+    def refresh_plex_library(self, library_key: str = '', force: bool = False) -> bool:
+        """Trigger a Plex library refresh. force=True re-reads metadata for every item."""
         key = library_key or self.tv_library_key
         if not self.plex_token or not key:
             logger.warning("Plex token or library key not configured — skipping refresh")
             return False
         try:
-            resp = requests.post(
+            params = {'X-Plex-Token': self.plex_token}
+            if force:
+                params['force'] = '1'
+            resp = requests.get(
                 f'{self.plex_url}/library/sections/{key}/refresh',
-                headers={'X-Plex-Token': self.plex_token},
+                params=params,
                 timeout=30
             )
-            if resp.status_code == 200:
-                logger.info(f"Plex library {key} refresh triggered")
+            if resp.status_code in (200, 204):
+                mode = 'forced (full metadata re-read)' if force else 'incremental (new items only)'
+                logger.info(f"Plex library {key} refresh triggered — {mode}")
                 return True
             logger.warning(f"Plex refresh returned status {resp.status_code}")
             return False
         except requests.RequestException as e:
             logger.error(f"Failed to trigger Plex refresh: {e}")
+            return False
+
+    def force_metadata_match(self, library_key: str = '') -> bool:
+        """Ask Plex to re-match metadata for every item in the library using local files."""
+        key = library_key or self.tv_library_key
+        if not self.plex_token or not key:
+            logger.warning("Plex token or library key not configured — skipping metadata match")
+            return False
+        try:
+            # Step 1 — force scan (picks up new .plexmatch and theme.mp3 files)
+            self.refresh_plex_library(key, force=True)
+            # Step 2 — fix match for every item (re-applies .plexmatch IDs)
+            resp = requests.put(
+                f'{self.plex_url}/library/sections/{key}/matches',
+                params={'X-Plex-Token': self.plex_token, 'auto': '1'},
+                timeout=30
+            )
+            if resp.status_code in (200, 204):
+                logger.info(f"Plex library {key} metadata re-match triggered")
+                return True
+            logger.warning(f"Plex metadata match returned status {resp.status_code}")
+            return False
+        except requests.RequestException as e:
+            logger.error(f"Failed to trigger Plex metadata match: {e}")
             return False
 
     # ------------------------------------------------------------------
@@ -2889,6 +2960,9 @@ if __name__ == '__main__':
                         help='Parallel workers for movie/TV processing (default: 1; '
                              'use 4 for initial bulk runs)')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--plex-scan', action='store_true',
+                        help='After processing, force a full Plex folder scan + metadata re-match '
+                             'so .plexmatch IDs and new files are picked up immediately')
 
     args = parser.parse_args()
 
@@ -2912,3 +2986,10 @@ if __name__ == '__main__':
 
     specific = args.show or args.movie
     orchestrator.run(media_type=args.media_type, specific_item=specific)
+
+    if args.plex_scan:
+        logger.info("Forcing Plex scan + metadata re-match for all configured libraries…")
+        if args.media_type in ('tv', 'all'):
+            orchestrator.force_metadata_match(orchestrator.tv_library_key)
+        if args.media_type in ('movies', 'all'):
+            orchestrator.force_metadata_match(orchestrator.movies_library_key)
