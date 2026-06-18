@@ -23,6 +23,7 @@ from urllib.parse import quote
 import xml.etree.ElementTree as ET
 import time
 import hashlib
+import threading
 
 # Configure logging
 _LOG_FILE = '/var/log/plex-metadata-generator.log'
@@ -130,21 +131,29 @@ class MusicBrainzProvider:
     # MusicBrainz policy: max 1 req/sec; back off on 503
     _MIN_INTERVAL = 1.1
 
+    # Class-level lock + timestamp shared across ALL instances and threads
+    _lock = threading.Lock()
+    _last_request_time: float = 0.0
+
     def __init__(self, user_agent: str = 'PlexMetadataGenerator/1.0'):
         self.user_agent = user_agent
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': user_agent})
-        self._last_request_time: float = 0.0
 
     def _get(self, url: str, params: dict, retries: int = 4) -> requests.Response:
-        """Rate-limited GET with exponential backoff on 503."""
+        """Rate-limited GET with exponential backoff on 503.
+        Class-level lock ensures only one request fires at a time across all threads."""
         import time
         for attempt in range(retries):
-            elapsed = time.time() - self._last_request_time
-            if elapsed < self._MIN_INTERVAL:
-                time.sleep(self._MIN_INTERVAL - elapsed)
-            self._last_request_time = time.time()
-            resp = self.session.get(url, params=params, timeout=15)
+            with MusicBrainzProvider._lock:
+                elapsed = time.time() - MusicBrainzProvider._last_request_time
+                if elapsed < self._MIN_INTERVAL:
+                    time.sleep(self._MIN_INTERVAL - elapsed)
+                MusicBrainzProvider._last_request_time = time.time()
+                try:
+                    resp = self.session.get(url, params=params, timeout=15)
+                except Exception:
+                    raise
             if resp.status_code == 503:
                 wait = 2 ** attempt
                 logger.warning(f"MusicBrainz 503 — retrying in {wait}s (attempt {attempt+1}/{retries})")
