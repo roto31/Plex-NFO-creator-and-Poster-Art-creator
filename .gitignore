@@ -1,15 +1,2 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
 .DS_Store
 *.log
-
-# SwiftPM build artifacts
-Native macOS App/.build/
-Native macOS App/.swiftpm/
-
-# Xcode
-*.xcuserdata/
-DerivedData/

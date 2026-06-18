@@ -10,7 +10,7 @@ Install macOS builds from [GitHub Releases](https://github.com/roto31/Plex-NFO-c
 
 - [Docs index](docs/README.md)
 - [Native macOS app — getting started](docs/getting-started.md)
-- [GitHub Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki)
+- [Distribution policy](docs/distribution-policy.md)
 
 ---
 

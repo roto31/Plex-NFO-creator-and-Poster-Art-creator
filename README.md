@@ -23,16 +23,17 @@ Verify the SHA-256 checksum in `release/<tag>/checksums.sha256` before installin
 
 See [Getting Started](docs/getting-started.md) and the [Native macOS App wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Native-macOS-App-Home).
 
-## Python CLI (Wiki)
+## Python CLI
 
-The Python scripts remain documented on the [GitHub Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki) for operators who prefer CLI or non-macOS hosts. Script source is not published here.
+**Script source is not published** in this repository. Plain `.py` files in a public git repo can always be copied; the supported model is documentation plus signed release binaries only.
 
-| Resource | Link |
-|----------|------|
-| **Installation** | [Wiki: Installation](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Installation) |
-| **Scraper reference** | [Wiki: scraper.py](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/scraper.py-Reference) |
-| **Troubleshooting** | [Wiki: Troubleshooting](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki/Troubleshooting) |
-| **Changelog** | [CHANGELOG.md](CHANGELOG.md) |
+| Need | Where |
+|------|--------|
+| How the CLI works | [GitHub Wiki](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/wiki) |
+| Runnable macOS GUI | [GitHub Releases](https://github.com/roto31/Plex-NFO-creator-and-Poster-Art-creator/releases) (signed DMG) |
+| Distribution policy | [docs/distribution-policy.md](docs/distribution-policy.md) |
+
+Future CLI builds (if offered) would ship as **compiled release artifacts**, not readable source in git.
 
 ## Requirements (native app)
 
