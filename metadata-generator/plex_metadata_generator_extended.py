@@ -1445,9 +1445,19 @@ class PlexMetadataOrchestrator:
         except IOError as e:
             logger.error(f"Failed to write artist NFO: {e}")
         
-        # Download artist image if available
-        if artist_metadata.image_url:
-            self.downloader.download_image(artist_metadata.image_url, artist_path / 'artist.jpg')
+        # Download artist image — prefer embedded artwork from first track in first album
+        artist_img_path = artist_path / 'artist.jpg'
+        if not artist_img_path.exists():
+            first_audio = None
+            for album_dir in sorted(artist_path.iterdir()):
+                if album_dir.is_dir() and not album_dir.name.startswith('.'):
+                    first_audio = self._first_audio_in_dir(album_dir)
+                    if first_audio:
+                        break
+            if first_audio and self._extract_embedded_artwork(first_audio, artist_img_path):
+                logger.info(f"  ✓ Extracted artist.jpg from embedded artwork ({first_audio.name})")
+            elif artist_metadata.image_url:
+                self.downloader.download_image(artist_metadata.image_url, artist_img_path)
         
         # Process albums in this artist directory
         for album_dir in artist_path.iterdir():
@@ -1528,9 +1538,14 @@ class PlexMetadataOrchestrator:
         except IOError as e:
             logger.error(f"Failed to write album NFO: {e}")
         
-        # Download cover art
-        if album_metadata.cover_url:
-            self.downloader.download_image(album_metadata.cover_url, album_path / 'folder.jpg')
+        # Download cover art — prefer embedded artwork from first track in album
+        cover_path = album_path / 'folder.jpg'
+        if not cover_path.exists():
+            first_audio = self._first_audio_in_dir(album_path)
+            if first_audio and self._extract_embedded_artwork(first_audio, cover_path):
+                logger.info(f"  ✓ Extracted album cover from embedded artwork ({first_audio.name})")
+            elif album_metadata.cover_url:
+                self.downloader.download_image(album_metadata.cover_url, cover_path)
         
         # Process individual tracks
         self._process_album_tracks(album_path, album_metadata, artist_metadata)
@@ -1585,6 +1600,35 @@ class PlexMetadataOrchestrator:
             except IOError as e:
                 logger.error(f"Failed to write track NFO: {e}")
     
+    @staticmethod
+    def _extract_embedded_artwork(source_path: Path, dest_path: Path) -> bool:
+        """Extract embedded cover art from a media file using ffmpeg (3-strategy cascade)."""
+        import subprocess as _sp
+        src = str(source_path)
+        dst = str(dest_path)
+        for cmd in [
+            ['ffmpeg', '-i', src, '-an', '-vframes', '1', '-map', '0:v:1', '-y', dst],
+            ['ffmpeg', '-i', src, '-map', '0:v', '-map', '-0:V', '-vframes', '1', '-y', dst],
+            ['ffmpeg', '-i', src, '-an', '-vsync', '2', '-y', dst],
+        ]:
+            try:
+                r = _sp.run(cmd, capture_output=True, timeout=30)
+                if r.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 1000:
+                    return True
+                dest_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return False
+
+    @staticmethod
+    def _first_audio_in_dir(directory: Path) -> Optional[Path]:
+        """Return the first audio file found in a directory (sorted), or None."""
+        audio_exts = {'.mp3', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.wav', '.aiff', '.alac'}
+        for f in sorted(directory.iterdir()):
+            if f.is_file() and f.suffix.lower() in audio_exts:
+                return f
+        return None
+
     def refresh_plex_library(self, library_key: str) -> bool:
         """Trigger Plex library refresh"""
         if not self.plex_token:

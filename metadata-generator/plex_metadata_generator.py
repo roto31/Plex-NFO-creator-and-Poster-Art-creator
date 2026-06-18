@@ -2348,14 +2348,19 @@ class PlexMetadataOrchestrator:
             if not backdrop_url:
                 backdrop_url = fanart_data.get('backdrop_url')
 
-        if need_poster and poster_url:
-            if self.dl.download_image(poster_url, folder / 'poster.jpg'):
-                # Copy to folder.jpg (Plex alternate name)
+        if need_poster:
+            # Try embedded artwork first (Subler/iTunes MP4 preferred over API download)
+            video_file = self._find_video_file(folder)
+            if video_file and self._extract_embedded_artwork(video_file, folder / 'poster.jpg'):
+                shutil.copy2(folder / 'poster.jpg', folder / 'folder.jpg')
+                logger.info(f"  ✓ Extracted poster.jpg from embedded artwork ({video_file.name})")
+                need_poster = False  # satisfied from embedded art
+            elif poster_url and self.dl.download_image(poster_url, folder / 'poster.jpg'):
                 shutil.copy2(folder / 'poster.jpg', folder / 'folder.jpg')
                 logger.info(f"  ✓ Copied poster.jpg → folder.jpg")
             elif not poster_url:
                 logger.warning(f"  ⚠ No poster source found for {folder.name}")
-        elif 'folder.jpg' in missing_art and (folder / 'poster.jpg').exists():
+        if 'folder.jpg' in missing_art and (folder / 'poster.jpg').exists():
             shutil.copy2(folder / 'poster.jpg', folder / 'folder.jpg')
 
         if need_backdrop and backdrop_url:
@@ -2447,9 +2452,18 @@ class PlexMetadataOrchestrator:
                 except IOError as e:
                     logger.error(f"  Failed to write tvshow.nfo: {e}")
 
-            # Download TVDB/TMDB artwork
-            if 'poster.jpg' in missing_art and meta.poster_url:
-                self.dl.download_image(meta.poster_url, show_dir / 'poster.jpg')
+            # Download artwork — try embedded extraction from first episode before API
+            if 'poster.jpg' in missing_art:
+                first_ep = None
+                for sd in sorted(show_dir.iterdir()):
+                    if sd.is_dir() and self._extract_season_number(sd.name) is not None:
+                        first_ep = self._first_video_in_dir(sd)
+                        if first_ep:
+                            break
+                if first_ep and self._extract_embedded_artwork(first_ep, show_dir / 'poster.jpg'):
+                    logger.info(f"  ✓ Extracted show poster.jpg from embedded artwork ({first_ep.name})")
+                elif meta.poster_url:
+                    self.dl.download_image(meta.poster_url, show_dir / 'poster.jpg')
             if 'banner.jpg' in missing_art and meta.banner_url:
                 self.dl.download_image(meta.banner_url, show_dir / 'banner.jpg')
             if 'fanart.jpg' in missing_art and meta.fanart_url:
@@ -2548,9 +2562,13 @@ class PlexMetadataOrchestrator:
                 except IOError:
                     pass
 
-            # Download season poster from TVDB if missing
-            if needs_season_poster and show_meta and show_meta.tvdb_id and self.tvdb:
-                self._download_season_poster(season_dir, show_meta.tvdb_id, season_num)
+            # Season poster — prefer embedded artwork from first episode of the season
+            if needs_season_poster:
+                first_ep = self._first_video_in_dir(season_dir)
+                if first_ep and self._extract_embedded_artwork(first_ep, season_dir / 'poster.jpg'):
+                    logger.info(f"  ✓ Extracted S{season_num:02d} poster.jpg from embedded artwork ({first_ep.name})")
+                elif show_meta and show_meta.tvdb_id and self.tvdb:
+                    self._download_season_poster(season_dir, show_meta.tvdb_id, season_num)
 
             # Process episodes
             self._process_episodes(season_dir, show_meta, season_num, show_imdb_id)
@@ -2619,8 +2637,12 @@ class PlexMetadataOrchestrator:
                 except IOError:
                     pass
 
-            if needs_thumb and ep_meta and ep_meta.thumb_url:
-                self.dl.download_image(ep_meta.thumb_url, thumb_path)
+            if needs_thumb:
+                # Try embedded artwork from the episode file first
+                if self._extract_embedded_artwork(vf, thumb_path):
+                    logger.debug(f"  ✓ Extracted thumb from embedded artwork ({vf.name})")
+                elif ep_meta and ep_meta.thumb_url:
+                    self.dl.download_image(ep_meta.thumb_url, thumb_path)
 
             # Download subtitles for this episode
             if self.subtitle_dl and show_imdb_id and ep_num is not None:
@@ -2631,6 +2653,55 @@ class PlexMetadataOrchestrator:
         m = re.search(r'[Ss]eason\s*(\d+)|[Ss](\d{2})', folder_name)
         if m:
             return int(m.group(1) or m.group(2))
+        return None
+
+    @staticmethod
+    def _extract_embedded_artwork(source_path: Path, dest_path: Path) -> bool:
+        """Extract embedded cover art from a media file using ffmpeg (3-strategy cascade).
+        Returns True if an image was successfully extracted to dest_path."""
+        import subprocess as _sp
+        src = str(source_path)
+        dst = str(dest_path)
+
+        # Strategy 1: secondary video stream (Subler/iTunes MP4: stream 0=video, 1=cover art)
+        try:
+            r = _sp.run(['ffmpeg', '-i', src, '-an', '-vframes', '1', '-map', '0:v:1', '-y', dst],
+                        capture_output=True, timeout=30)
+            if r.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 1000:
+                return True
+            dest_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        # Strategy 2: attached_pic stream (MKV, some MP4, most audio files)
+        try:
+            r = _sp.run(['ffmpeg', '-i', src, '-map', '0:v', '-map', '-0:V', '-vframes', '1', '-y', dst],
+                        capture_output=True, timeout=30)
+            if r.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 1000:
+                return True
+            dest_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        # Strategy 3: explicit vsync fallback
+        try:
+            r = _sp.run(['ffmpeg', '-i', src, '-an', '-vsync', '2', '-y', dst],
+                        capture_output=True, timeout=30)
+            if r.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 1000:
+                return True
+            dest_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return False
+
+    @staticmethod
+    def _first_video_in_dir(directory: Path) -> Optional[Path]:
+        """Return the first video file found in a directory (sorted), or None."""
+        video_exts = {'.mp4', '.m4v', '.mkv', '.avi', '.mov'}
+        for f in sorted(directory.iterdir()):
+            if f.is_file() and f.suffix.lower() in video_exts:
+                return f
         return None
 
     # ------------------------------------------------------------------
